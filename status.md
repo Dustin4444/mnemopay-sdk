@@ -1,40 +1,39 @@
-# mnemopay-sdk status — 2026-05-06
+# mnemopay-sdk status — 2026-05-08
 
 ## Shipped today
-- **Praetor consolidation Phases 1, 2, 5, 7, 8 — COMPLETE.** Phase 6 staged (deploy needed). Phases 3, 4 held on senior/user decisions.
-- **`@mnemopay/sdk@1.5.0` PUBLISHED** — governance fold (Charter, FiscalGate, runMission, Article 12, MerkleAudit). Git tag `v1.5.0`, commit `c20267b`, merged to master (`950fc9a`), pushed.
-- **`@mnemopay/toolkit@0.1.0` PUBLISHED** — meta-package depending on 14 `@kpanks/*` packages. New repo scaffold at `~/Projects/mnemopay-toolkit/`.
-- **mnemopay.com index.html updated** — Praetor section killed, replaced with Toolkit section (14 packages grid, install.sh code, npm-install CTA). Footer trademark dropped Praetor. Schema.org + ai:description + section spine + top nav + footer column all migrated.
-- **mnemopay.com/toolkit** — new full-polish landing page (toolkit.html). Curtain, particles, Lenis, mask-hero, tilt cards. Hero: "Capabilities for agents that handle money."
-- **mnemopay.com/compliance** — already shipped earlier today.
-- **vercel.json** — added redirects: `praetor.mnemopay.com/*` → `mnemopay.com/governance` (host-based 301), `/praetor`+`/praetor.html` → `/toolkit`, plus clean-URL rules for compliance.html and toolkit.html.
-- **sitemap.xml** — added `/toolkit` and `/compliance` entries.
-  - `src/governance/{audit,charter,runtime,article12,payments,index}.ts` — 6 files folded from `praetor/packages/{core,payments}`
-  - `tests/governance.spec.ts` — 11 tests, all passing
-  - `src/index.ts` — additive exports appended (no breaking changes)
-  - Full suite: 886/887 (1 pre-existing flake in `recall-edge.test.ts` timeout, unrelated)
-- **mnemopay.com narrative pivot** to "portable trust layer for agents that handle money" (live in `index.html`, not yet redeployed)
-  - Hero `data-mask-hero` text + meta tags + chip + right-column tagline
-  - New `#portable` section between Manifesto and Stack with Today/Roadmap chip rows (honesty per senior review)
-  - Section spine + nav + footer updated
-- **`mnemopay-site/compliance.html`** — new full-polish enterprise compliance page with Article 12 audit-bundle JSON example, regulations mapping, pilot pricing
-- **Strategic pivot research + handoff doc** — `docs/strategy-2026-05-06/{mcp-hive-application,praetor-split-execution-plan,session-summary}.md`
-- **MCP Hive Founding-100 application** sent to `info@mcp-hive.com` (Resend, status 200, Maileroo schema bug discovered & fixed)
-- **Maileroo schema bug fixed** in `marketing/send-strategic-2026-05-06.js` — `to: [{address: x}]`. Existing send-eu-ai-act.js + send-day4-followups.js verified already correct.
+
+### Packages
+
+- **`@mnemopay/sdk@1.6.0-alpha.1` PUBLISHED to npm under `alpha` dist-tag.** `latest` still `1.5.0` — stable users see no change. Tag `v1.6.0-alpha.1` pushed to origin (commit `3863163`).
+  - **`X402Rail`** — Coinbase x402 protocol (HTTP 402 Payment Required revival). USDC on Base L2 via EIP-3009 `transferWithAuthorization`. Pluggable `X402Signer` (bring-your-own viem/ethers/noble). Hold = signed authorization (not broadcast); capture = facilitator HTTP submit; reverse pre-capture = `reversed`, post-capture = `irreversible`. **38/38 tests.**
+  - **`GoogleAP2Rail`** — Google Agent Payment Protocol (FIDO Alliance, AP2 v0.2 Human-Not-Present). Mandate VC + Intent VC + HTTP settlement. Pre-flight policy enforcement (caps, expiry, currency match, allowed-recipients) **before any signature is produced** — defense-in-depth. **41/41 tests.**
+  - Conflict resolution on master merge: kept both rail re-export blocks in `src/rails/index.ts` and `src/index.ts` (independent rails).
+
+- **`mnemopay@1.0.0b4` PUBLISHED to PyPI** ([pypi.org/project/mnemopay/1.0.0b4](https://pypi.org/project/mnemopay/1.0.0b4/)). Python rail port — mirrors the TypeScript `PaymentRail` interface. Sync API.
+  - `mnemopay.rails`: `PaymentRail` Protocol, `PaymentRailResult`, `HoldOptions`, `MockRail`, `StripeRail`
+  - `StripeRail`: lazy `import stripe` peer-dep, `from_client()` for tests, threading.Lock-based capture race-protection, idempotency-key forwarding, `create_customer` + `create_setup_intent` helpers
+  - 29 new rail tests; full suite 422/422 green
+  - `[stripe]` optional dependency group added to `pyproject.toml`
+
+### Documentation + site
+
+- **mnemopay-sdk README** rewritten: governance pivot frame ("the governance layer for AI agents that handle money"), v1.6.0-alpha rails table, "What MnemoPay is NOT" callout, 6-rail Payment Rails section (3 stable + 3 alpha), updated architecture diagram with governance + spatial rows.
+- **mnemopay-python README** rewritten: governance pivot, payment rails section with code examples, TS-vs-Python compatibility matrix.
+- **mnemopay.com** — Today/Roadmap chip block reorganized into 3 tiers: Stable (`latest` v1.5.0), Preview (`alpha` v1.6.0-alpha.1, all 3 alpha rails marked `· shipped`), Roadmap (Visa IC + Mastercard pending acquirer). Meta description updated. Deployed to Vercel prod (alias `mnemopay.com` confirmed live).
+
+### Test posture
+- TypeScript suite: **1019/1020** (1 unrelated stress-test perf flake — p99 605ms vs 500ms target, Windows-load sensitive)
+- Python suite: **422/422**
 
 ## In progress
-- mnemopay.com production redeploy — local edits ready (Phase 6 redirects + Phase 7 toolkit.html + Phase 8 brand kill on index.html + sitemap update), gated on Vercel deploy
+- (none — alpha.1 ship cycle closed)
 
 ## Blocked
-- **Phase 3 (BizSuite content packages):** senior decision needed on integration shape — plugins under `biz-plugins/plugin-*` vs new `@bizsuite/*` npm scope
-- **Phase 4 (personal-project handoff):** Jeremiah's call needed on name + npm scope for `3d`/`world-gen`/`game`/`game-assets`
-- **mnemopay.com Vercel deploy:** local files staged, awaiting `vercel --prod` or git push trigger
-- E2E haiku-goal silent failure in praetor master (separate session)
+- **`@mnemopay/sdk@1.6.0` (latest)** — gated on real-world alpha.1 feedback. Promote `alpha` → `latest` once external integrators have run x402/AP2 against live facilitators / merchant endpoints.
+- **Visa IC, Mastercard Agent Suite rails** — pending acquirer access (no engineering work).
 
 ## Next session
-- Senior reviews `feedback_senior_review_2026_05_06.md` + `project_mnemopay_platform_2026_05_06.md` from shared memory; answers the 5 open questions (toolkit shape, BizSuite integration shape, personal-project name, sequencing, @kpanks/* deprecation tone)
-- Once cleared: npm publish `@mnemopay/sdk@1.5.0`
-- Phase 2 toolkit rename: 14 packages republish under `@mnemopay/*`, create `@mnemopay/toolkit` meta
-- Production redeploy of mnemopay.com (hero pivot + compliance.html + portable section)
-- Update mnemopay.com `#praetor` section to remove Praetor brand entirely (currently still says "Mission runtime · $99/mo")
-- Recall-edge test timeout — re-run on fresh machine to confirm flaky vs real
+- Decide on a **Python parity expansion plan**: at minimum port `PaystackRail` + `LightningRail` to match TS feature surface, then evaluate StripeMPP / x402 / AP2 in Python.
+- **Console v0.2** — auth, live data wiring (currently mock), real charter editor.
+- Explore **promoting `alpha` → `latest`** once external integrators confirm x402/AP2 work end-to-end against live counterparties.
+- **SOC 2 Type II** ops process (Q3 2026 Vanta start, Q1 2027 audit) — separate workstream.

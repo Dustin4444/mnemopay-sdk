@@ -4,6 +4,27 @@ Older entries preserved when `status.md` rolls over. Newest archived at top.
 
 ---
 
+## 2026-05-06
+
+### Shipped today
+- **Praetor consolidation Phases 1, 2, 5, 7, 8 — COMPLETE.** Phase 6 staged (deploy needed). Phases 3, 4 held on senior/user decisions.
+- **`@mnemopay/sdk@1.5.0` PUBLISHED** — governance fold (Charter, FiscalGate, runMission, Article 12, MerkleAudit). Git tag `v1.5.0`, commit `c20267b`, merged to master (`950fc9a`), pushed.
+- **`@mnemopay/toolkit@0.1.0` PUBLISHED** — meta-package depending on 14 `@kpanks/*` packages. New repo scaffold at `~/Projects/mnemopay-toolkit/`.
+- **mnemopay.com index.html updated** — Praetor section killed, replaced with Toolkit section. Footer trademark dropped Praetor.
+- **mnemopay.com/toolkit** — new full-polish landing page (toolkit.html).
+- **mnemopay.com/compliance** — full-polish enterprise compliance page with Article 12 audit-bundle JSON example.
+- **vercel.json** redirects: `praetor.mnemopay.com/*` → `/governance` (host-based 301), `/praetor` → `/toolkit`.
+- **sitemap.xml** updated for `/toolkit` and `/compliance`.
+- **`src/governance/{audit,charter,runtime,article12,payments,index}.ts`** — 6 files folded from `praetor/packages/{core,payments}`. `tests/governance.spec.ts` 11/11. Full suite 886/887 (1 pre-existing flake).
+- **MCP Hive Founding-100 application** sent.
+- **Maileroo schema bug fix** in `marketing/send-strategic-2026-05-06.js` (`to: [{address: x}]`).
+
+### Blocked at the time
+- Phase 3 (BizSuite content packages) — senior decision on shape
+- Phase 4 (personal-project handoff) — name + npm scope decision (later resolved as Blackpig Films LLC `~/Projects/blackpig-forge/`, `@blackpig/*` scope)
+
+---
+
 ## 2026-04-17
 
 ### Shipped today
