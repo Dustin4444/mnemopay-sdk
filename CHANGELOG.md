@@ -4,6 +4,84 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [1.6.0-alpha.1] — 2026-05-08
+
+Second pre-release on the `alpha` dist-tag. Adds the next two v1.6.x
+rails on top of `1.6.0-alpha.0` (Stripe MPP + spatial governance):
+
+```bash
+npm install @mnemopay/sdk@alpha
+```
+
+The default `latest` dist-tag still points at `1.5.0` — stable users
+are not affected. Sister Python release: `mnemopay@1.0.0b4` on PyPI.
+
+### Added — experimental
+
+- **`X402Rail`** — Coinbase x402 protocol rail (HTTP 402 Payment
+  Required revival). USDC on Base L2 (chain id `8453`) via EIP-3009
+  `transferWithAuthorization` — agents sign authorizations off-chain,
+  facilitator endpoints submit to the chain on capture. 38 tests.
+  - Pluggable `X402Signer` interface (bring-your-own crypto:
+    `viem` / `ethers` / `@noble/secp256k1`) — SDK ships zero
+    crypto deps
+  - Hold = signed authorization (NOT broadcast yet)
+  - Capture = submit to facilitator (chain settlement)
+  - Reverse pre-capture = `reversed` (drop the signed auth);
+    post-capture = `irreversible` (chain reality, surfaced in
+    `PaymentRailResult.status`)
+  - Helpers: `usdToUsdcBaseUnits`, `newNonce`,
+    `buildTransferWithAuthorizationTypedData`
+  - Constants: `BASE_MAINNET_CHAIN_ID`, `BASE_SEPOLIA_CHAIN_ID`,
+    `ETH_MAINNET_CHAIN_ID`, `USDC_CONTRACTS` (frozen),
+    `USDC_DECIMALS=6`
+  - Default contract: USDC on Base mainnet
+    (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)
+
+- **`GoogleAP2Rail`** — Google Agent Payment Protocol (FIDO Alliance
+  open standard, AP2 v0.2 — Human Not Present). Mandate Verifiable
+  Credential signed by the principal + Intent VC signed by the agent
+  + HTTP settlement to the merchant's AP2 endpoint. 41 tests.
+  - Pluggable `AP2Signer` interface
+  - **Pre-flight policy enforcement** before any signature is produced:
+    mandate expiry, per-tx cap, aggregate cap (rolling), currency
+    match, allowed-recipients allow-list, signer credential matches
+    mandate. Defense-in-depth — the SDK refuses to build an Intent VC
+    that violates the mandate, even if the merchant would accept it.
+  - Hold = build + sign Intent VC
+  - Capture = HTTP `POST` `{mandate, intentId}` with header
+    `x-ap2-version: 0.2`
+  - Helpers: `validateMandate`, `usdToMinorUnits`, `newIntentNonce`,
+    `newIntentId`
+
+### Public API additions in `src/index.ts` (additive, no breaking changes)
+
+- `X402Rail`, `GoogleAP2Rail`, `validateMandate`
+- `BASE_MAINNET_CHAIN_ID`, `BASE_SEPOLIA_CHAIN_ID`,
+  `ETH_MAINNET_CHAIN_ID`, `USDC_CONTRACTS`, `USDC_DECIMALS`
+- type exports: `X402Options`, `X402Signer`,
+  `X402AuthorizationPayload`, `TransferWithAuthorizationTypedData`,
+  `AP2Mandate`, `AP2Intent`, `AP2Signer`, `AP2Options`,
+  `AP2SettlementResponse`, `AP2MandateValidation`
+
+### Compatibility
+
+- Fully backward compatible with v1.5.0 and v1.6.0-alpha.0. No
+  existing consumer sees an API change.
+- x402 has zero new runtime deps; the SDK does not import any crypto
+  library — consumers wire their own signer.
+- AP2 has zero new runtime deps; signer + settlement endpoint are
+  consumer-supplied.
+
+### Sister release
+
+- **`mnemopay@1.0.0b4`** (PyPI) — Python rail port. Mirrors the
+  TypeScript `PaymentRail` interface (sync API). Ships `MockRail` +
+  `StripeRail` (lazy `import stripe` peer-dep, threading.Lock-based
+  capture race-protection, idempotency-key forwarding,
+  `create_customer` + `create_setup_intent` helpers). 29 new tests,
+  full suite 422/422 green.
+
 ## [1.6.0-alpha.0] — 2026-05-08
 
 Pre-release published under the `alpha` npm dist-tag. The default
