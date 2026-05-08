@@ -1,31 +1,57 @@
 # MnemoPay
 
-**The trust & reputation layer for AI agents.** Agent Credit Score + Behavioral Finance + Payments + Memory + Identity in one SDK.
+**The governance layer for AI agents that handle money.** Charter-driven mission scope, FiscalGate budget enforcement, EU AI Act Article 12 audit bundles, Agent Credit Score (300-850), and a tamper-evident MerkleAudit chain — across every payment rail an agent will ever touch.
 
-Your agent builds a credit score, detects fraud in real time, makes psychologically sound financial decisions, and proves its memory hasn't been tampered with. All on top of persistent memory, real payment rails, and a double-entry ledger that never drifts by a penny.
+MnemoPay sits **above** the rail (Stripe, Paystack, Lightning, Stripe MPP, x402, Google AP2) and **below** the agent runtime (LangChain, CrewAI, Claude Agent SDK, your own loop). The rail moves money. The runtime decides. MnemoPay declares the rules, enforces the budget, and produces the evidence.
 
 ```bash
-npm install @mnemopay/sdk
+npm install @mnemopay/sdk           # stable (v1.5.x)
+npm install @mnemopay/sdk@alpha     # v1.6.x preview — Stripe MPP + x402 + Google AP2 rails
 ```
 
 ```ts
-import MnemoPay, { AgentCreditScore, BehavioralEngine, MerkleTree } from "@mnemopay/sdk";
+import MnemoPay, {
+  Charter, FiscalGate, MerkleAudit,        // governance primitives
+  AgentCreditScore, BehavioralEngine,       // trust + reputation
+  StripeRail, X402Rail, GoogleAP2Rail,      // rails (alpha)
+} from "@mnemopay/sdk";
 
 const agent = MnemoPay.quick("my-agent");
 
 await agent.remember("User prefers monthly billing");
-const tx = await agent.charge(25, "Monthly API access");
-await agent.settle(tx.id);
+const tx = await agent.charge(25, "Monthly API access");   // FiscalGate hold
+await agent.settle(tx.id);                                  // FiscalGate capture
 
-// Score the agent (portable agent credit score, 300-850 range)
-// Not FICO-brand. Not affiliated with Fair Isaac Corporation or any consumer
-// credit bureau. Scores agents (software), not humans. Not governed by FCRA.
+// Agent credit score — portable, 300-850 range. NOT FICO-brand, NOT a consumer
+// credit report, NOT governed by FCRA. Scores agents (software), not humans.
 const score = new AgentCreditScore();
-const result = score.compute({ transactions: [tx], createdAt: new Date(), ...});
+const result = score.compute({ transactions: [tx], createdAt: new Date(), /* ... */ });
 // → { score: 672, rating: "good", feeRate: 0.015, trustLevel: "standard" }
 ```
 
-14 modules. Hash-chained ledger. Replay detection. Reputation streaks. 200K-operation stress tested. Apache 2.0 licensed.
+14 modules. Hash-chained ledger. Charter / FiscalGate / Article 12 audit bundles. 6 payment rails. 200K-operation stress tested. Apache 2.0.
+
+> **What MnemoPay is NOT:** not a bank, not a money transmitter, not a Stripe replacement, not an agent framework, not a compliance platform. It's the rules-and-evidence layer between the rail and the runtime.
+
+---
+
+## What's new in v1.6.0-alpha (preview channel)
+
+Three new rails, all native, all sharing the same `PaymentRail` interface as `StripeRail` / `PaystackRail` / `LightningRail`:
+
+| Rail | What it is | Status |
+|---|---|---|
+| **`StripeMPPRail`** | Stripe Machine Payments Protocol — agent payments routed as crypto deposits on the Tempo network via Stripe-pinned API `2026-03-04.preview` | alpha |
+| **`X402Rail`** | Coinbase x402 (HTTP 402 revival) — USDC on Base L2 via EIP-3009 `transferWithAuthorization`. Pluggable signer (bring-your-own viem/ethers/noble). Zero crypto deps in the SDK. | alpha |
+| **`GoogleAP2Rail`** | Google Agent Payment Protocol (FIDO Alliance, AP2 v0.2). Mandate VC + Intent VC + HTTP settlement. Pre-flight policy enforcement (caps, expiry, currency, recipients) before any signature is produced. | alpha |
+
+Plus the **Spatial governance fold** — `attachSpatialEvidence()` co-signs the MerkleAudit chain with GridStamp proof-of-presence for embodied agents (drones, robots). Loose-coupled — no `gridstamp` runtime dependency.
+
+```bash
+npm install @mnemopay/sdk@alpha
+```
+
+The `latest` dist-tag still points at `1.5.0` — stable users see no change. Promote `alpha` → `latest` when v1.6.0 ships.
 
 ---
 
@@ -381,17 +407,32 @@ See `docs/agent-sdk-guide.md` for a full integration walkthrough.
 
 ## Payment Rails
 
+Every rail implements the same `PaymentRail` interface — `createHold` / `capturePayment` / `reversePayment`. Swap rails without touching agent code.
+
+| Rail | Coverage | Channel |
+|---|---|---|
+| `StripeRail` | Cards (USD, EUR, GBP, +) | stable (`latest`) |
+| `PaystackRail` | Africa (NGN, GHS, ZAR, KES) | stable (`latest`) |
+| `LightningRail` | BTC sub-cent micropayments | stable (`latest`) |
+| `StripeMPPRail` | Crypto deposits on Tempo via Stripe MPP | preview (`alpha`) |
+| `X402Rail` | USDC on Base via EIP-3009 transferWithAuthorization | preview (`alpha`) |
+| `GoogleAP2Rail` | AP2 v0.2 mandate-driven settlement (FIDO Alliance) | preview (`alpha`) |
+
 ```ts
-import { PaystackRail, StripeRail, LightningRail } from "@mnemopay/sdk";
+import {
+  PaystackRail, StripeRail, LightningRail,    // stable
+  StripeMPPRail, X402Rail, GoogleAP2Rail,      // alpha
+} from "@mnemopay/sdk";
 
-// Africa (NGN, GHS, ZAR, KES)
-const paystack = new PaystackRail(process.env.PAYSTACK_SECRET_KEY!);
-
-// Global (USD, EUR, GBP)
-const stripe = new StripeRail(process.env.STRIPE_SECRET_KEY!);
-
-// Crypto (BTC via Lightning Network)
+// Stable
+const paystack  = new PaystackRail(process.env.PAYSTACK_SECRET_KEY!);
+const stripe    = new StripeRail(process.env.STRIPE_SECRET_KEY!);
 const lightning = new LightningRail(LND_URL, MACAROON);
+
+// Preview (v1.6.0-alpha)
+const mpp   = new StripeMPPRail(process.env.STRIPE_SECRET_KEY!);
+const x402  = new X402Rail({ signer: yourEip3009Signer });   // bring-your-own crypto
+const ap2   = new GoogleAP2Rail({ mandate, endpoint, signer });
 
 const agent = MnemoPay.quick("my-agent", { paymentRail: paystack });
 ```
@@ -489,27 +530,34 @@ import { mnemoPayTools } from "@mnemopay/sdk/langgraph";
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│                    MnemoPay SDK v1.3.0                     │
-├──────────┬──────────┬───────────┬──────────────────────────┤
-│  Memory  │ Payments │ Identity  │  Agent Credit Score (300-850)    │
-│          │          │           │  5-component scoring     │
-│ remember │ charge   │ KYA       ├──────────────────────────┤
-│ recall   │ settle   │ tokens    │  Behavioral Finance      │
-│ reinforce│ refund   │ perms     │  prospect theory, nudges │
-│ forget   │ dispute  │ killswitch├──────────────────────────┤
-│          │          │           │  Anomaly Detection       │
-│          │          │           │  EWMA + fingerprinting   │
-├──────────┴──────────┴───────────┼──────────────────────────┤
-│     Double-Entry Ledger         │  Merkle Integrity        │
-│  debit + credit = always zero   │  tamper-evident memory   │
-├─────────────────────────────────┼──────────────────────────┤
-│     Fraud Guard (ML-grade)      │  Canary Honeypots        │
-│  velocity + geo + adaptive      │  compromise detection    │
-├─────────────────────────────────┴──────────────────────────┤
-│              Payment Rails                                 │
-│        Paystack  │   Stripe   │   Lightning                │
-└────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                MnemoPay SDK v1.6.0-alpha (alpha tag)             │
+│            v1.5.0 stable on `latest` — same architecture          │
+├─────────────────────────────────────────────────────────────────┤
+│ GOVERNANCE  Charter · FiscalGate · Article 12 · MerkleAudit      │
+│             mission scope, budget enforcement, audit bundles     │
+├──────────┬──────────┬───────────┬─────────────────────────────────┤
+│  Memory  │ Payments │ Identity  │  Agent Credit Score (300-850)   │
+│          │          │           │  5-component scoring            │
+│ remember │ charge   │ KYA       ├─────────────────────────────────┤
+│ recall   │ settle   │ tokens    │  Behavioral Finance             │
+│ reinforce│ refund   │ perms     │  prospect theory, nudges        │
+│ forget   │ dispute  │ killswitch├─────────────────────────────────┤
+│          │          │           │  Anomaly Detection              │
+│          │          │           │  EWMA + fingerprinting          │
+├──────────┴──────────┴───────────┼─────────────────────────────────┤
+│     Double-Entry Ledger         │  Merkle Integrity               │
+│  debit + credit = always zero   │  tamper-evident memory          │
+├─────────────────────────────────┼─────────────────────────────────┤
+│     Fraud Guard (ML-grade)      │  Canary Honeypots               │
+│  velocity + geo + adaptive      │  compromise detection           │
+├─────────────────────────────────┴─────────────────────────────────┤
+│ SPATIAL    GridStamp adapter — proof-of-presence for embodied      │
+│            agents (drones, robots). Loose-coupled, fail-closed.    │
+├──────────────────────────────────────────────────────────────────┤
+│ RAILS  Stripe · Paystack · Lightning · StripeMPP · x402 · AP2    │
+│        same PaymentRail interface — drop-in swap, no agent diff   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
