@@ -23,3 +23,12 @@ export type { Article12Bundle, Article12BundleFile, Article12BundleInput } from 
 
 export { MockPayments } from "./payments.js";
 export type { PaymentsAdapter } from "./payments.js";
+
+export { attachSpatialEvidence, verifySpatialEvidence, fingerprintSpatialEvidence } from "./spatial.js";
+export type {
+  SpatialEvidence,
+  SpatialEvidenceVerifyResult,
+  SpatialEvidenceRejectReason,
+  GridStampSpatialProof,
+  GridStampSplatEvidence,
+} from "./spatial.js";

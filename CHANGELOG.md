@@ -4,6 +4,72 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [1.6.0-alpha.0] — 2026-05-08
+
+Pre-release published under the `alpha` npm dist-tag. The default
+`latest` dist-tag still points at `1.5.0`. Opt in with:
+
+```bash
+npm install @mnemopay/sdk@alpha
+```
+
+The full `1.6.0` minor will ship when the v1.6.x rail sprint completes
+(Stripe MPP + x402 + Google AP2, all native, with Python rail port).
+This alpha cuts the first two real deliverables.
+
+### Added — experimental
+
+- **`StripeMPPRail`** — Stripe Machine Payments Protocol rail, the first
+  cross-rail v1.6.x adapter. Routes agent payments as crypto deposits on
+  the Tempo network via Stripe's MPP-enabled PaymentIntents API. Pinned
+  to API version `2026-03-04.preview`. Same `PaymentRail` interface as
+  `StripeRail`, drop-in swap. 20 tests.
+  - `payment_method_types: ["crypto"]` + `crypto.deposit_options.networks`
+  - `capture_method: "manual"` two-phase escrow
+  - In-flight capture deduplication
+  - Idempotency-key forwarding
+  - `fromClient(client, opts?)` for tests + shared Stripe client patterns
+  - Tagged `@experimental` — preview API can change without semver
+    guarantees from Stripe; pin `apiVersion` in production
+
+- **Spatial governance fold** (`src/governance/spatial.ts`) — GridStamp
+  evidence adapter for embodied agents. Loose coupling: NO dependency
+  on the `gridstamp` npm package. Define the structural shape MnemoPay
+  expects to receive (mirrored from gridstamp's published types) and
+  fail-closed verifier. 19 tests.
+  - `attachSpatialEvidence(audit, evidence)` — records `spatial.evidence`
+    event in MerkleAudit chain with content fingerprint
+  - `verifySpatialEvidence(e)` — structural integrity check
+  - `fingerprintSpatialEvidence(e)` — deterministic SHA-256 over
+    canonical JSON (sorted-keys replacer)
+  - Types: `SpatialEvidence` (discriminated union of
+    `GridStampSpatialProof` + `GridStampSplatEvidence`),
+    `SpatialEvidenceVerifyResult`, `SpatialEvidenceRejectReason`
+  - Article 12 bundle integration: `spatial.evidence` events appear in
+    `events.json` + `events.csv` exports automatically
+
+  Pairs with `gridstamp` master commit `559e26c` (2026-05-08) — completes
+  the SPZ-4 (Niantic Gaussian splat) evidence adapter sitting uncommitted
+  since 2026-05-06.
+
+### Public API additions in `src/index.ts` (additive, no breaking changes)
+
+- `StripeMPPRail`
+- `attachSpatialEvidence`, `verifySpatialEvidence`, `fingerprintSpatialEvidence`
+- type exports: `StripeMPPOptions`, `SpatialEvidence`,
+  `SpatialEvidenceVerifyResult`, `SpatialEvidenceRejectReason`,
+  `GridStampSpatialProof`, `GridStampSplatEvidence`
+
+### Compatibility
+
+- Fully backward compatible with v1.5.0. Existing consumers see no API
+  change.
+- Stripe MPP rail requires `stripe@>=14.0.0` (already a peer dep) +
+  Stripe API access. Falls back to existing `StripeRail` if MPP is not
+  enabled on the account.
+- Spatial fold is loose-coupled — the SDK works with or without the
+  `gridstamp` package on the consumer side.
+
 ## [1.5.0] — 2026-05-06
 
 ### Added
