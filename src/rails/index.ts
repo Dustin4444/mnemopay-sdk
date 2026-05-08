@@ -303,6 +303,23 @@ export type {
   TransferWithAuthorizationTypedData,
 } from "./x402.js";
 
+// Re-export Google AP2 rail (experimental, v1.6.x — open standard, FIDO Alliance)
+export {
+  GoogleAP2Rail,
+  validateMandate,
+  usdToMinorUnits,
+  newIntentNonce,
+  newIntentId,
+} from "./google-ap2.js";
+export type {
+  AP2Mandate,
+  AP2Intent,
+  AP2Signer,
+  AP2Options,
+  AP2SettlementResponse,
+  AP2MandateValidation,
+} from "./google-ap2.js";
+
 // ─── Lightning Rail (L402) ──────────────────────────────────────────────────
 // Requires a running LND node. Uses HODL invoices for escrow.
 
