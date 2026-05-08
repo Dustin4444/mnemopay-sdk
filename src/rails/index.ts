@@ -284,6 +284,25 @@ export type {
 export { StripeMPPRail } from "./stripe-mpp.js";
 export type { StripeMPPOptions } from "./stripe-mpp.js";
 
+// Re-export x402 rail (experimental, v1.6.x — USDC on Base default)
+export {
+  X402Rail,
+  BASE_MAINNET_CHAIN_ID,
+  BASE_SEPOLIA_CHAIN_ID,
+  ETH_MAINNET_CHAIN_ID,
+  USDC_CONTRACTS,
+  USDC_DECIMALS,
+  buildTransferWithAuthorizationTypedData,
+  usdToUsdcBaseUnits,
+  newNonce,
+} from "./x402.js";
+export type {
+  X402Options,
+  X402Signer,
+  X402AuthorizationPayload,
+  TransferWithAuthorizationTypedData,
+} from "./x402.js";
+
 // ─── Lightning Rail (L402) ──────────────────────────────────────────────────
 // Requires a running LND node. Uses HODL invoices for escrow.
 
