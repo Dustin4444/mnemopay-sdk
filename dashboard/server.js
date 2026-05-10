@@ -17,10 +17,13 @@ const DEFAULT_ACCOUNT_ID = process.env.MNEMOPAY_ACCOUNT_ID || 'default';
 const CONSOLE_STORE_PATH = process.env.MNEMOPAY_CONSOLE_STORE || path.join(process.cwd(), '.mnemopay-console', 'console-store.json');
 const CONSOLE_STORE_DRIVER = process.env.MNEMOPAY_CONSOLE_STORE_DRIVER || (process.env.MNEMOPAY_CONSOLE_SQLITE ? 'sqlite' : 'json');
 const CONSOLE_SQLITE_PATH = process.env.MNEMOPAY_CONSOLE_SQLITE || path.join(process.cwd(), '.mnemopay-console', 'console-store.sqlite');
+const CONSOLE_POSTGRES_URL = process.env.MNEMOPAY_CONSOLE_POSTGRES_URL || process.env.NEON_URL || process.env.DATABASE_URL;
 const SESSION_COOKIE_NAME = process.env.MNEMOPAY_SESSION_COOKIE || 'mnemo_console_session';
 const SESSION_SECRET = process.env.MNEMOPAY_SESSION_SECRET || process.env.MNEMOPAY_SECRET || 'mnemopay-console-dev-secret';
 const SESSION_TTL_MS = Math.max(3600_000, parseInt(process.env.MNEMOPAY_SESSION_TTL_MS || String(7 * 24 * 3600_000), 10));
 let consoleSqlite;
+let consolePostgresStore;
+let consolePostgresSaveChain = Promise.resolve();
 
 // ── Initialize the real SDK ─────────────────────────────────────────────────
 let agent;
@@ -942,8 +945,78 @@ function saveConsoleStoreToSqlite() {
   write();
 }
 
-function loadConsoleStore() {
+function consoleSnapshot() {
+  const usage = {};
+  for (const [accountId, counters] of usageCounters.entries()) usage[accountId] = counters;
+  return {
+    version: 1,
+    savedAt: new Date().toISOString(),
+    apiKeys: Array.from(apiKeys.values()),
+    brainMemories: Array.from(brainMemories.values()),
+    brainEntities: Array.from(brainEntities.values()),
+    brainEdges: Array.from(brainEdges.values()),
+    auditEvents,
+    usageCounters: usage,
+    accountPlans: Array.from(accountPlans.values()),
+    consoleSessions: Array.from(consoleSessions.values()).filter((session) => new Date(session.expiresAt).getTime() > Date.now()),
+    accountMembers: Array.from(accountMembers.values()),
+  };
+}
+
+function applyConsoleSnapshot(data = {}) {
+  for (const row of data.apiKeys || []) apiKeys.set(row.id, row);
+  for (const row of data.brainMemories || []) brainMemories.set(row.id, row);
+  for (const row of data.brainEntities || []) brainEntities.set(row.id, row);
+  for (const row of data.brainEdges || []) brainEdges.set(row.id, row);
+  for (const row of data.auditEvents || []) auditEvents.push(row);
+  for (const [accountId, usage] of Object.entries(data.usageCounters || {})) {
+    usageCounters.set(accountId, { ...blankUsage(), ...usage });
+  }
+  for (const row of data.accountPlans || []) accountPlans.set(row.accountId, row);
+  for (const row of data.consoleSessions || []) {
+    if (new Date(row.expiresAt).getTime() > Date.now()) consoleSessions.set(row.id, row);
+  }
+  for (const row of data.accountMembers || []) accountMembers.set(row.id, row);
+}
+
+async function openConsolePostgresStore() {
+  if (consolePostgresStore) return consolePostgresStore;
+  if (!CONSOLE_POSTGRES_URL) {
+    throw new Error('MNEMOPAY_CONSOLE_POSTGRES_URL, NEON_URL, or DATABASE_URL is required for postgres console store');
+  }
+  const { PostgresConsoleStore } = require('./console-postgres-store.cjs');
+  consolePostgresStore = new PostgresConsoleStore({
+    url: CONSOLE_POSTGRES_URL,
+    tablePrefix: process.env.MNEMOPAY_CONSOLE_POSTGRES_PREFIX || 'console',
+  });
+  return consolePostgresStore;
+}
+
+async function loadConsoleStoreFromPostgres() {
+  const store = await openConsolePostgresStore();
+  const data = await store.loadSnapshot();
+  applyConsoleSnapshot(data);
+  console.log(`[console-store] loaded ${apiKeys.size} keys, ${brainMemories.size} brain memories, ${auditEvents.length} audit events from postgres`);
+}
+
+function saveConsoleStoreToPostgres() {
+  consolePostgresSaveChain = consolePostgresSaveChain
+    .then(async () => {
+      const store = await openConsolePostgresStore();
+      await store.saveSnapshot(consoleSnapshot());
+    })
+    .catch((e) => {
+      console.warn(`[console-store] failed to save postgres snapshot: ${e.message}`);
+    });
+  return consolePostgresSaveChain;
+}
+
+async function loadConsoleStore() {
   try {
+    if (CONSOLE_STORE_DRIVER === 'postgres') {
+      await loadConsoleStoreFromPostgres();
+      return;
+    }
     if (CONSOLE_STORE_DRIVER === 'sqlite') {
       loadConsoleStoreFromSqlite();
       return;
@@ -951,49 +1024,27 @@ function loadConsoleStore() {
     if (!fs.existsSync(CONSOLE_STORE_PATH)) return;
     const raw = fs.readFileSync(CONSOLE_STORE_PATH, 'utf8');
     const data = JSON.parse(raw);
-    for (const row of data.apiKeys || []) apiKeys.set(row.id, row);
-    for (const row of data.brainMemories || []) brainMemories.set(row.id, row);
-    for (const row of data.brainEntities || []) brainEntities.set(row.id, row);
-    for (const row of data.brainEdges || []) brainEdges.set(row.id, row);
-    for (const row of data.auditEvents || []) auditEvents.push(row);
-    for (const [accountId, usage] of Object.entries(data.usageCounters || {})) {
-      usageCounters.set(accountId, { ...blankUsage(), ...usage });
-    }
-    for (const row of data.accountPlans || []) accountPlans.set(row.accountId, row);
-    for (const row of data.consoleSessions || []) {
-      if (new Date(row.expiresAt).getTime() > Date.now()) consoleSessions.set(row.id, row);
-    }
-    for (const row of data.accountMembers || []) accountMembers.set(row.id, row);
+    applyConsoleSnapshot(data);
     console.log(`[console-store] loaded ${apiKeys.size} keys, ${brainMemories.size} brain memories, ${auditEvents.length} audit events from ${CONSOLE_STORE_PATH}`);
   } catch (e) {
-    console.warn(`[console-store] failed to load ${CONSOLE_STORE_PATH}: ${e.message}`);
+    console.warn(`[console-store] failed to load ${CONSOLE_STORE_DRIVER} store: ${e.message}`);
   }
 }
 
 function saveConsoleStore() {
   try {
+    if (CONSOLE_STORE_DRIVER === 'postgres') {
+      saveConsoleStoreToPostgres();
+      return;
+    }
     if (CONSOLE_STORE_DRIVER === 'sqlite') {
       saveConsoleStoreToSqlite();
       return;
     }
     fs.mkdirSync(path.dirname(CONSOLE_STORE_PATH), { recursive: true });
-    const usage = {};
-    for (const [accountId, counters] of usageCounters.entries()) usage[accountId] = counters;
-    fs.writeFileSync(CONSOLE_STORE_PATH, JSON.stringify({
-      version: 1,
-      savedAt: new Date().toISOString(),
-      apiKeys: Array.from(apiKeys.values()),
-      brainMemories: Array.from(brainMemories.values()),
-      brainEntities: Array.from(brainEntities.values()),
-      brainEdges: Array.from(brainEdges.values()),
-      auditEvents,
-      usageCounters: usage,
-      accountPlans: Array.from(accountPlans.values()),
-      consoleSessions: Array.from(consoleSessions.values()).filter((session) => new Date(session.expiresAt).getTime() > Date.now()),
-      accountMembers: Array.from(accountMembers.values()),
-    }, null, 2));
+    fs.writeFileSync(CONSOLE_STORE_PATH, JSON.stringify(consoleSnapshot(), null, 2));
   } catch (e) {
-    console.warn(`[console-store] failed to save ${CONSOLE_STORE_PATH}: ${e.message}`);
+    console.warn(`[console-store] failed to save ${CONSOLE_STORE_DRIVER} store: ${e.message}`);
   }
 }
 
@@ -1443,8 +1494,6 @@ function onboardingState(accountId) {
   };
 }
 
-loadConsoleStore();
-
 // ── Server ──────────────────────────────────────────────────────────────────
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 
@@ -1831,7 +1880,7 @@ const server = http.createServer(async (req, res) => {
 
   // Health
   if (pathname === '/healthz') {
-    return json(res, { status: 'ok', mode: 'live', agentId: agent.agentId || 'dashboard-live' });
+    return json(res, { status: 'ok', mode: 'live', agentId: agent.agentId || 'dashboard-live', storeDriver: CONSOLE_STORE_DRIVER });
   }
 
   // ── Static files ────────────────────────────────────────────────────────
@@ -1845,13 +1894,22 @@ const server = http.createServer(async (req, res) => {
   json(res, { error: 'Not found' }, 404);
 });
 
-server.listen(PORT, () => {
-  console.log(`\n  MnemoPay Live Dashboard`);
-  console.log(`  ────────────────────────`);
-  console.log(`  URL:     http://localhost:${PORT}`);
-  console.log(`  Agent:   ${agent.agentId || 'dashboard-live'}`);
-  console.log(`  Mode:    Live (real SDK)`);
-  console.log(`  API:     /api/memories, /api/charge, /api/settle, /api/repos`);
-  console.log(`  Brain:   /api/v1/brain/memories, /api/v1/brain/query`);
-  console.log(`  Repos:   ${MONITORED_REPOS.length} monitored\n`);
+async function startServer() {
+  await loadConsoleStore();
+  server.listen(PORT, () => {
+    console.log(`\n  MnemoPay Live Dashboard`);
+    console.log(`  ────────────────────────`);
+    console.log(`  URL:     http://localhost:${PORT}`);
+    console.log(`  Agent:   ${agent.agentId || 'dashboard-live'}`);
+    console.log(`  Mode:    Live (real SDK)`);
+    console.log(`  Store:   ${CONSOLE_STORE_DRIVER}`);
+    console.log(`  API:     /api/memories, /api/charge, /api/settle, /api/repos`);
+    console.log(`  Brain:   /api/v1/brain/memories, /api/v1/brain/query`);
+    console.log(`  Repos:   ${MONITORED_REPOS.length} monitored\n`);
+  });
+}
+
+startServer().catch((e) => {
+  console.error(`[server] failed to start: ${e.message}`);
+  process.exit(1);
 });

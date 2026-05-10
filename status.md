@@ -1,4 +1,15 @@
-﻿# mnemopay-sdk status - 2026-05-10 13:36 Codex
+﻿# mnemopay-sdk status - 2026-05-10 14:04 Codex
+
+## Postgres console-store wired behind env flag
+
+- Wired the live dashboard server to the Postgres console-store bridge behind `MNEMOPAY_CONSOLE_STORE_DRIVER=postgres`.
+- Postgres mode reads `MNEMOPAY_CONSOLE_POSTGRES_URL`, `NEON_URL`, or `DATABASE_URL` at startup, bootstraps tables through `dashboard/console-postgres-store.cjs`, loads the console snapshot before `server.listen`, and serializes saves asynchronously after mutations.
+- JSON and SQLite paths remain unchanged for local/dev use.
+- `/healthz` now reports the active console store driver.
+- Added optional `pg` peer dependency metadata for hosted Postgres/Neon deployments.
+
+---
+# mnemopay-sdk status - 2026-05-10 13:36 Codex
 
 ## Postgres console-store bridge added
 

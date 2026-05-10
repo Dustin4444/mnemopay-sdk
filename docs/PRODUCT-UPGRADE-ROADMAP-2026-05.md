@@ -177,7 +177,8 @@ Python should not try to mirror every internal TypeScript primitive first. It sh
 - Added `dashboard/console-postgres-store.cjs` as the production DB bridge for the hosted console.
 - The adapter bootstraps typed Postgres tables for API keys, hosted Brain memories/entities/edges, audit events, usage counters, account plans, sessions, and members, while preserving JSONB payload copies for replay/debugging.
 - Added mock-pool coverage in `dashboard/console-postgres-store.test.cjs`.
-- The live server is still JSON/SQLite by default. Next step is wiring async server startup to `MNEMOPAY_CONSOLE_STORE_DRIVER=postgres`.
+- Wired the live dashboard to `MNEMOPAY_CONSOLE_STORE_DRIVER=postgres` with `MNEMOPAY_CONSOLE_POSTGRES_URL`, `NEON_URL`, or `DATABASE_URL`.
+- JSON and SQLite remain the defaults for local/dev use. Postgres saves are serialized asynchronously after mutations.
 
 ## SOC 2/compliance path
 
