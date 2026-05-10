@@ -450,6 +450,7 @@ function BrainPanel({ onRefresh }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [exported, setExported] = useState(null);
+  const [status, setStatus] = useState('');
 
   const storeMemory = async () => {
     if (!content.trim()) return;
@@ -462,12 +463,38 @@ function BrainPanel({ onRefresh }) {
     if (!query.trim()) return;
     const payload = await api.post('/api/v1/brain/query', { namespace, query, limit: 6 });
     setResults(payload.results || []);
+    setStatus(`Found ${(payload.results || []).length} matching memories.`);
     onRefresh();
   };
 
   const exportNamespace = async () => {
     const payload = await api.get(`/api/v1/brain/namespaces/${encodeURIComponent(namespace)}/export`);
     setExported(payload);
+    setStatus(`Exported ${(payload.memories || []).length} memories from ${payload.namespace}.`);
+    onRefresh();
+  };
+
+  const downloadExport = () => {
+    if (!exported) return;
+    const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${exported.namespace || namespace}-mnemopay-export.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const deleteNamespace = async () => {
+    const target = namespace.trim();
+    if (!target) return;
+    if (!window.confirm(`Delete namespace "${target}" for this account? Export it first if you need a copy.`)) return;
+    const payload = await api.del(`/api/v1/brain/namespaces/${encodeURIComponent(target)}`);
+    setResults([]);
+    setExported(null);
+    setStatus(`Deleted ${payload.deleted || 0} memories from ${target}.`);
     onRefresh();
   };
 
@@ -480,10 +507,13 @@ function BrainPanel({ onRefresh }) {
           <input className="md:col-span-2 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none"
             value={content} onChange={e => setContent(e.target.value)} placeholder="Memory to store" />
         </div>
-        <div className="flex gap-2 mt-3">
+        <div className="flex flex-wrap gap-2 mt-3">
           <button onClick={storeMemory} className="px-4 py-2 bg-teal text-white rounded-lg text-sm font-medium">Store Memory</button>
           <button onClick={exportNamespace} className="px-4 py-2 bg-white/5 border border-white/10 text-gray-300 rounded-lg text-sm">Export Namespace</button>
+          <button onClick={downloadExport} disabled={!exported} className="px-4 py-2 bg-white/5 border border-white/10 text-gray-300 rounded-lg text-sm disabled:opacity-40">Download JSON</button>
+          <button onClick={deleteNamespace} className="px-4 py-2 bg-red-500/15 border border-red-500/25 text-red-200 rounded-lg text-sm">Delete Namespace</button>
         </div>
+        {status && <p className="mt-3 text-xs text-gray-500">{sanitize(status)}</p>}
       </div>
 
       <div className="glass rounded-xl p-4">
@@ -506,7 +536,10 @@ function BrainPanel({ onRefresh }) {
       {exported && (
         <div className="glass rounded-xl p-4">
           <h3 className="text-sm font-semibold text-gray-300 mb-2">Export: {sanitize(exported.namespace)}</h3>
-          <p className="text-xs text-gray-500 mb-3">{(exported.memories || []).length} memories exported</p>
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <p className="text-xs text-gray-500">{(exported.memories || []).length} memories exported</p>
+            <button onClick={downloadExport} className="px-3 py-1.5 bg-white/5 border border-white/10 text-gray-300 rounded-lg text-xs">Download JSON</button>
+          </div>
           <pre className="text-xs text-gray-300 bg-black/30 rounded-lg p-3 overflow-auto max-h-56">{JSON.stringify(exported.memories || [], null, 2)}</pre>
         </div>
       )}

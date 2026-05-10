@@ -36,6 +36,13 @@ Near-term implementation path:
 - Split the single HTML into a real app only after the API contracts settle.
 - Use PWA first. Native mobile can come later if push approvals/alerts become central.
 
+2026-05-10 console progress:
+
+- The dashboard now has visible app panels for overview, hosted brain, developer API keys, billing/onboarding, and control audit.
+- The hosted brain panel can store memories, query namespaces, export namespaces, download export JSON, and delete a namespace with confirmation.
+- Namespace export and deletion are account-scoped and record audit events.
+- Smoke validation passed on a temporary console store: dashboard HTML served, controls were present, API key creation returned a one-time secret, namespace export returned one memory, delete removed it, inspect returned zero memories, and audit contained `brain.namespace.deleted`.
+
 ## Hosted brain API
 
 Goal: turn local recall into a production service other apps can call.

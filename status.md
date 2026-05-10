@@ -1,4 +1,17 @@
-﻿# mnemopay-sdk status - 2026-05-10 00:45 Codex
+﻿# mnemopay-sdk status - 2026-05-10 01:08 Codex
+
+## Hosted brain console controls added
+
+- Continued the MnemoPay console/app build after the dashboard panel checkpoint.
+- `dashboard/index.html` now gives the Hosted Brain panel proper operator controls: namespace export, export JSON download, namespace deletion with confirmation, and inline status feedback after query/export/delete.
+- The action row now wraps on narrower screens so the console does not crowd the new controls.
+- Updated `docs/PRODUCT-UPGRADE-ROADMAP-2026-05.md` with the console progress and validation checkpoint.
+- Validation: `node --check dashboard/server.js` passed. Local smoke on temp store/port passed: dashboard HTML served, `Delete Namespace` and `Download JSON` controls were present, API key creation returned a one-time secret, namespace export returned 1 memory, namespace delete removed it, namespace inspect returned 0 memories, and audit contained `brain.namespace.deleted`.
+- Note: the MnemoPay skill expects the MCP to be connected. This Codex session currently exposes no MnemoPay MCP resources via `list_mcp_resources`; `claude mcp list` timed out once, so MCP connection still needs a clean follow-up check.
+- Next: move the JSON console store to a real DB/Neon-backed service, add auth/session handling, and add production API key/usage/billing automation.
+
+---
+# mnemopay-sdk status - 2026-05-10 00:45 Codex
 
 ## Dashboard UI panels started for MnemoPay console
 
@@ -183,7 +196,4 @@ See `bizsuite-site/status.md` and `~/.claude/projects/.../memory/project_session
 - **Console v0.2** â€” auth, live data wiring (currently mock), real charter editor.
 - Explore **promoting `alpha` â†’ `latest`** once external integrators confirm x402/AP2 work end-to-end against live counterparties.
 - **SOC 2 Type II** ops process (Q3 2026 Vanta start, Q1 2027 audit) â€” separate workstream.
-
-
-
 
