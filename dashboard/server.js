@@ -421,8 +421,37 @@ function publicAuthChallenge(challenge, code) {
     accountId: challenge.accountId,
     email: challenge.email,
     expiresAt: challenge.expiresAt,
+    delivery: challenge.delivery || null,
     devCode: AUTH_RETURN_CODES ? code : undefined,
   };
+}
+
+async function deliverAuthChallenge(challenge, code) {
+  const { sendAuthCodeEmail } = require('./auth-email.cjs');
+  try {
+    const delivery = await sendAuthCodeEmail({
+      apiKey: process.env.RESEND_API_KEY,
+      from: process.env.MNEMOPAY_AUTH_EMAIL_FROM,
+      to: challenge.email,
+      code,
+      accountId: challenge.accountId,
+    });
+    challenge.delivery = delivery;
+    recordAudit(challenge.accountId, delivery.delivered ? 'auth.challenge.email.sent' : 'auth.challenge.email.skipped', `auth:${challenge.id}`, {
+      email: challenge.email,
+      provider: delivery.provider,
+      reason: delivery.reason || null,
+      id: delivery.id || null,
+    });
+    saveConsoleStore();
+    return delivery;
+  } catch (e) {
+    challenge.delivery = { delivered: false, provider: 'resend', reason: e.message };
+    recordAudit(challenge.accountId, 'auth.challenge.email.failed', `auth:${challenge.id}`, { email: challenge.email, error: e.message });
+    saveConsoleStore();
+    if (process.env.NODE_ENV === 'production') throw e;
+    return challenge.delivery;
+  }
 }
 
 function verifyAuthChallenge({ challengeId, code }) {
@@ -1680,6 +1709,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readBody(req);
       const created = createAuthChallenge(body);
+      await deliverAuthChallenge(created.challenge, created.code);
       return json(res, { ok: true, challenge: publicAuthChallenge(created.challenge, created.code) }, 201);
     } catch (e) {
       return errorJson(res, e);

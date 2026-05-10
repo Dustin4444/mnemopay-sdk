@@ -1,4 +1,15 @@
-﻿# mnemopay-sdk status - 2026-05-10 15:04 Codex
+﻿# mnemopay-sdk status - 2026-05-10 15:23 Codex
+
+## Auth code email delivery added
+
+- Added `dashboard/auth-email.cjs`, an optional Resend email helper for passwordless console login codes.
+- Added `dashboard/auth-email.test.cjs` covering email copy, dev fallback, and injected Resend send payloads.
+- `/api/v1/auth/challenge` now attempts code delivery when `RESEND_API_KEY` and `MNEMOPAY_AUTH_EMAIL_FROM` are configured.
+- Dev/local mode still returns inline codes for testing. Production mode surfaces delivery failure instead of silently granting a code that was not sent.
+- Auth challenge delivery state is included in the public challenge payload and audited as sent, skipped, or failed.
+
+---
+# mnemopay-sdk status - 2026-05-10 15:04 Codex
 
 ## Passwordless console auth foundation added
 
