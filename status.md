@@ -1,4 +1,20 @@
-﻿# mnemopay-sdk status - 2026-05-10 02:44 Codex
+﻿# mnemopay-sdk status - 2026-05-10 09:02 Codex
+
+## Signed console sessions added
+
+- Dirty item inspected: `benchmark/longmemeval/longmemeval-repo` is a nested Git checkout. Inside it, only `src/evaluation/evaluate_qa_azure.py` is untracked. It is benchmark/vendor research material and was left untouched.
+- Continued the MnemoPay console/app build with auth/session-backed console accounts.
+- `dashboard/server.js` now supports signed browser sessions alongside Bearer API keys.
+- Added `GET /api/v1/auth/session`, `POST /api/v1/auth/login`, and `POST /api/v1/auth/logout`.
+- Session cookies are HMAC-signed with `MNEMOPAY_SESSION_SECRET` or `MNEMOPAY_SECRET`, HttpOnly, SameSite=Lax, persisted in JSON/SQLite stores, and removed on logout.
+- Account resolution order is now Bearer API key, signed session cookie, then `X-MnemoPay-Account` dev fallback.
+- Session create/logout writes audit events: `auth.session.created` and `auth.session.revoked`.
+- Dashboard API client now sends same-origin credentials, Console panel shows session state, and a new Session tab can sign in, switch accounts, and sign out.
+- Validation passed: `node --check dashboard/server.js`; SQLite session smoke verified login cookie, `/auth/session`, account resolution without account header, session audit event, and logout revocation.
+- Next: real hosted identity provider/user membership model, then Python hosted client parity.
+
+---
+# mnemopay-sdk status - 2026-05-10 02:44 Codex
 
 ## Stripe webhook provisioning intake added
 

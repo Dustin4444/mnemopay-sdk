@@ -68,6 +68,15 @@ Production requirements:
 - Privacy: namespace deletion, export, retention policy, consent text.
 - Observability: query latency, token cost, cache hit rate, recall quality feedback.
 
+2026-05-10 auth/session progress:
+
+- Added signed browser console sessions alongside Bearer API key auth.
+- Endpoints: `GET /api/v1/auth/session`, `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`.
+- Session cookies are HMAC-signed with `MNEMOPAY_SESSION_SECRET` or `MNEMOPAY_SECRET`, HttpOnly, SameSite=Lax, and persisted in JSON/SQLite stores until expiry.
+- Account resolution order is now Bearer API key, signed browser session, then `X-MnemoPay-Account` dev fallback.
+- Dashboard now has a Session tab for signing into/switching an account, plus visible session state in the Console panel.
+- This is still lightweight console auth. The hosted product still needs a real identity provider and user/account membership model.
+
 2026-05-10 persistence progress:
 
 - Added an optional SQLite console store behind `MNEMOPAY_CONSOLE_STORE_DRIVER=sqlite` or `MNEMOPAY_CONSOLE_SQLITE=/path/to/console-store.sqlite`.

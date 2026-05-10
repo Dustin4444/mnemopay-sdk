@@ -17,6 +17,9 @@ const DEFAULT_ACCOUNT_ID = process.env.MNEMOPAY_ACCOUNT_ID || 'default';
 const CONSOLE_STORE_PATH = process.env.MNEMOPAY_CONSOLE_STORE || path.join(process.cwd(), '.mnemopay-console', 'console-store.json');
 const CONSOLE_STORE_DRIVER = process.env.MNEMOPAY_CONSOLE_STORE_DRIVER || (process.env.MNEMOPAY_CONSOLE_SQLITE ? 'sqlite' : 'json');
 const CONSOLE_SQLITE_PATH = process.env.MNEMOPAY_CONSOLE_SQLITE || path.join(process.cwd(), '.mnemopay-console', 'console-store.sqlite');
+const SESSION_COOKIE_NAME = process.env.MNEMOPAY_SESSION_COOKIE || 'mnemo_console_session';
+const SESSION_SECRET = process.env.MNEMOPAY_SESSION_SECRET || process.env.MNEMOPAY_SECRET || 'mnemopay-console-dev-secret';
+const SESSION_TTL_MS = Math.max(3600_000, parseInt(process.env.MNEMOPAY_SESSION_TTL_MS || String(7 * 24 * 3600_000), 10));
 let consoleSqlite;
 
 // ── Initialize the real SDK ─────────────────────────────────────────────────
@@ -26,6 +29,7 @@ const brainMemories = new Map();
 const apiKeys = new Map();
 const usageCounters = new Map();
 const accountPlans = new Map();
+const consoleSessions = new Map();
 const auditEvents = [];
 try {
   const SDK = require('../dist/index.js');
@@ -227,6 +231,75 @@ function hashSecret(secret) {
   return crypto.createHash('sha256').update(String(secret)).digest('hex');
 }
 
+function hmac(value) {
+  return crypto.createHmac('sha256', SESSION_SECRET).update(String(value)).digest('base64url');
+}
+
+function parseCookies(req) {
+  const header = String(req.headers.cookie || '');
+  return header.split(';').reduce((cookies, part) => {
+    const idx = part.indexOf('=');
+    if (idx > -1) cookies[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+    return cookies;
+  }, {});
+}
+
+function signedSessionCookie(sessionId) {
+  return `${sessionId}.${hmac(sessionId)}`;
+}
+
+function verifySessionCookie(value) {
+  const raw = String(value || '');
+  const idx = raw.lastIndexOf('.');
+  if (idx < 1) return null;
+  const sessionId = raw.slice(0, idx);
+  const sig = raw.slice(idx + 1);
+  const expected = hmac(sessionId);
+  try {
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  } catch {
+    return null;
+  }
+  return sessionId;
+}
+
+function publicSession(session) {
+  if (!session) return null;
+  return {
+    id: session.id,
+    accountId: session.accountId,
+    email: session.email || null,
+    name: session.name || null,
+    createdAt: session.createdAt,
+    expiresAt: session.expiresAt,
+    lastSeenAt: session.lastSeenAt || null,
+  };
+}
+
+function sessionForRequest(req) {
+  const sessionId = verifySessionCookie(parseCookies(req)[SESSION_COOKIE_NAME]);
+  if (!sessionId) return null;
+  const session = consoleSessions.get(sessionId);
+  if (!session) return null;
+  if (new Date(session.expiresAt).getTime() <= Date.now()) {
+    consoleSessions.delete(sessionId);
+    saveConsoleStore();
+    return null;
+  }
+  session.lastSeenAt = new Date().toISOString();
+  return session;
+}
+
+function setSessionCookie(res, sessionId) {
+  const maxAge = Math.floor(SESSION_TTL_MS / 1000);
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=${encodeURIComponent(signedSessionCookie(sessionId))}; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=Lax${secure}`);
+}
+
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`);
+}
+
 function blankUsage() {
   return { brainWrites: 0, brainQueries: 0, railCharges: 0, railSettlements: 0 };
 }
@@ -310,6 +383,23 @@ function accountPlanFor(accountId) {
   const current = accountPlans.get(accountId);
   if (current) return { ...current, limits: PLAN_CATALOG[current.plan] || PLAN_CATALOG.free };
   return defaultAccountPlan(accountId);
+}
+
+function createConsoleSession({ accountId, email, name }) {
+  const now = new Date();
+  const session = {
+    id: `sess_${uuid()}`,
+    accountId: String(accountId || DEFAULT_ACCOUNT_ID).slice(0, 120),
+    email: email ? String(email).slice(0, 180) : null,
+    name: name ? String(name).slice(0, 120) : null,
+    createdAt: now.toISOString(),
+    lastSeenAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + SESSION_TTL_MS).toISOString(),
+  };
+  consoleSessions.set(session.id, session);
+  recordAudit(session.accountId, 'auth.session.created', `session:${session.id}`, { email: session.email, name: session.name });
+  saveConsoleStore();
+  return session;
 }
 
 function missionUsage(usage) {
@@ -462,6 +552,8 @@ function accountIdForRequest(req) {
       return key.accountId;
     }
   }
+  const session = sessionForRequest(req);
+  if (session?.accountId) return session.accountId;
   const headerAccount = req.headers['x-mnemopay-account'];
   return String(Array.isArray(headerAccount) ? headerAccount[0] : headerAccount || DEFAULT_ACCOUNT_ID).slice(0, 120);
 }
@@ -534,6 +626,18 @@ function openConsoleSqlite() {
       updated_at TEXT,
       payload TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS console_sessions (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      email TEXT,
+      name TEXT,
+      created_at TEXT NOT NULL,
+      last_seen_at TEXT,
+      expires_at TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_console_sessions_account ON console_sessions(account_id);
   `);
   consoleSqlite = db;
   return consoleSqlite;
@@ -559,6 +663,10 @@ function loadConsoleStoreFromSqlite() {
   for (const row of db.prepare('SELECT account_id, payload FROM console_account_plans').all()) {
     accountPlans.set(row.account_id, JSON.parse(row.payload));
   }
+  for (const row of db.prepare('SELECT id, payload FROM console_sessions').all()) {
+    const session = JSON.parse(row.payload);
+    if (new Date(session.expiresAt).getTime() > Date.now()) consoleSessions.set(row.id, session);
+  }
   console.log(`[console-store] loaded ${apiKeys.size} keys, ${brainMemories.size} brain memories, ${auditEvents.length} audit events from sqlite ${CONSOLE_SQLITE_PATH}`);
 }
 
@@ -573,6 +681,7 @@ function saveConsoleStoreToSqlite() {
     db.prepare('DELETE FROM console_audit_events').run();
     db.prepare('DELETE FROM console_usage_counters').run();
     db.prepare('DELETE FROM console_account_plans').run();
+    db.prepare('DELETE FROM console_sessions').run();
 
     const insertKey = db.prepare(`INSERT INTO console_api_keys
       (id, account_id, name, prefix, key_hash, created_at, last_used_at, revoked_at, payload)
@@ -637,6 +746,20 @@ function saveConsoleStoreToSqlite() {
         payload: JSON.stringify(plan),
       });
     }
+
+    const insertSession = db.prepare(`INSERT INTO console_sessions
+      (id, account_id, email, name, created_at, last_seen_at, expires_at, payload)
+      VALUES (@id, @accountId, @email, @name, @createdAt, @lastSeenAt, @expiresAt, @payload)`);
+    for (const session of consoleSessions.values()) {
+      if (new Date(session.expiresAt).getTime() <= Date.now()) continue;
+      insertSession.run({
+        ...session,
+        email: session.email || null,
+        name: session.name || null,
+        lastSeenAt: session.lastSeenAt || null,
+        payload: JSON.stringify(session),
+      });
+    }
   });
 
   write();
@@ -658,6 +781,9 @@ function loadConsoleStore() {
       usageCounters.set(accountId, { ...blankUsage(), ...usage });
     }
     for (const row of data.accountPlans || []) accountPlans.set(row.accountId, row);
+    for (const row of data.consoleSessions || []) {
+      if (new Date(row.expiresAt).getTime() > Date.now()) consoleSessions.set(row.id, row);
+    }
     console.log(`[console-store] loaded ${apiKeys.size} keys, ${brainMemories.size} brain memories, ${auditEvents.length} audit events from ${CONSOLE_STORE_PATH}`);
   } catch (e) {
     console.warn(`[console-store] failed to load ${CONSOLE_STORE_PATH}: ${e.message}`);
@@ -681,6 +807,7 @@ function saveConsoleStore() {
       auditEvents,
       usageCounters: usage,
       accountPlans: Array.from(accountPlans.values()),
+      consoleSessions: Array.from(consoleSessions.values()).filter((session) => new Date(session.expiresAt).getTime() > Date.now()),
     }, null, 2));
   } catch (e) {
     console.warn(`[console-store] failed to save ${CONSOLE_STORE_PATH}: ${e.message}`);
@@ -870,7 +997,9 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 
 const server = http.createServer(async (req, res) => {
   // CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-MnemoPay-Account, Stripe-Signature');
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
@@ -879,6 +1008,35 @@ const server = http.createServer(async (req, res) => {
   const pathname = url.pathname;
 
   // ── API Routes ──────────────────────────────────────────────────────────
+
+  if (pathname === '/api/v1/auth/session' && req.method === 'GET') {
+    const session = sessionForRequest(req);
+    return json(res, { ok: true, authenticated: !!session, session: publicSession(session) });
+  }
+
+  if (pathname === '/api/v1/auth/login' && req.method === 'POST') {
+    try {
+      const body = await readBody(req);
+      const accountId = String(body.accountId || DEFAULT_ACCOUNT_ID).trim().slice(0, 120);
+      if (!accountId) throw new Error('accountId required');
+      const session = createConsoleSession({ accountId, email: body.email, name: body.name });
+      setSessionCookie(res, session.id);
+      return json(res, { ok: true, session: publicSession(session), accountId: session.accountId }, 201);
+    } catch (e) {
+      return errorJson(res, e);
+    }
+  }
+
+  if (pathname === '/api/v1/auth/logout' && req.method === 'POST') {
+    const session = sessionForRequest(req);
+    if (session) {
+      consoleSessions.delete(session.id);
+      recordAudit(session.accountId, 'auth.session.revoked', `session:${session.id}`, {});
+      saveConsoleStore();
+    }
+    clearSessionCookie(res);
+    return json(res, { ok: true });
+  }
 
   // Memories
   if (pathname === '/api/memories' && req.method === 'GET') {

@@ -77,7 +77,7 @@ function accountHeaders() {
 
 const api = {
   async get(path) {
-    const res = await fetch(`${API_BASE}${path}`, { headers: accountHeaders() });
+    const res = await fetch(`${API_BASE}${path}`, { headers: accountHeaders(), credentials: 'same-origin' });
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     return res.json();
   },
@@ -86,12 +86,13 @@ const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...accountHeaders() },
       body: JSON.stringify(body),
+      credentials: 'same-origin',
     });
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     return res.json();
   },
   async del(path) {
-    const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: accountHeaders() });
+    const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: accountHeaders(), credentials: 'same-origin' });
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     return res.json();
   },
@@ -350,6 +351,7 @@ function AuditPanel({ logs }) {
 function ConsolePanel({ overview, accountId, onAccountChange, onRefresh }) {
   const onboarding = overview?.onboarding?.tasks || [];
   const usage = overview?.usage || {};
+  const session = overview?.session;
   return (
     <div className="space-y-4 fade-in">
       <div className="glass rounded-xl p-5">
@@ -358,6 +360,7 @@ function ConsolePanel({ overview, accountId, onAccountChange, onRefresh }) {
             <p className="text-xs uppercase tracking-wider text-teal mb-2">Operator Console</p>
             <h2 className="text-2xl font-bold text-white">Brain, wallet, and audit trail</h2>
             <p className="text-sm text-gray-400 mt-2">{overview?.positioning || 'MnemoPay control plane for AI agents that handle money.'}</p>
+            <p className="text-xs text-gray-500 mt-2">Session: {session?.authenticated ? `signed in as ${sanitize(session.session?.accountId || accountId)}` : 'dev header fallback'}</p>
           </div>
           <div className="flex gap-2 items-center">
             <input className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none"
@@ -683,6 +686,57 @@ function ControlAuditPanel({ events }) {
   );
 }
 
+function SessionPanel({ session, accountId, onLogin, onLogout }) {
+  const [nextAccount, setNextAccount] = useState(accountId || 'default');
+  const [email, setEmail] = useState('');
+
+  useEffect(() => {
+    setNextAccount(accountId || 'default');
+  }, [accountId]);
+
+  const submit = async () => {
+    await onLogin(nextAccount, email);
+  };
+
+  return (
+    <div className="fade-in glass rounded-xl p-5">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <p className="text-xs uppercase tracking-wider text-teal mb-2">Console Session</p>
+          <h3 className="text-xl font-bold text-white">{session?.authenticated ? 'Signed session active' : 'Start signed session'}</h3>
+          <p className="text-sm text-gray-400 mt-2">Browser sessions bind dashboard actions to an account before the full hosted auth provider lands.</p>
+        </div>
+        {session?.authenticated && (
+          <button onClick={onLogout} className="px-4 py-2 bg-red-500/15 border border-red-500/25 text-red-200 rounded-lg text-sm">Sign out</button>
+        )}
+      </div>
+      <div className="grid md:grid-cols-3 gap-3 mt-4">
+        <input className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none"
+          value={nextAccount} onChange={e => setNextAccount(e.target.value)} placeholder="account id" />
+        <input className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none"
+          value={email} onChange={e => setEmail(e.target.value)} placeholder="email optional" />
+        <button onClick={submit} className="px-4 py-2 bg-teal text-white rounded-lg text-sm font-medium">{session?.authenticated ? 'Switch Account' : 'Sign In'}</button>
+      </div>
+      {session?.authenticated && (
+        <div className="mt-4 grid md:grid-cols-3 gap-3 text-xs">
+          <div className="rounded-lg bg-white/5 border border-white/10 p-3">
+            <div className="text-gray-500">Account</div>
+            <div className="text-white font-mono mt-1">{sanitize(session.session?.accountId || '')}</div>
+          </div>
+          <div className="rounded-lg bg-white/5 border border-white/10 p-3">
+            <div className="text-gray-500">Created</div>
+            <div className="text-gray-300 mt-1">{session.session?.createdAt ? new Date(session.session.createdAt).toLocaleString() : ''}</div>
+          </div>
+          <div className="rounded-lg bg-white/5 border border-white/10 p-3">
+            <div className="text-gray-500">Expires</div>
+            <div className="text-gray-300 mt-1">{session.session?.expiresAt ? new Date(session.session.expiresAt).toLocaleString() : ''}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RepoCard({ repo }) {
   const statusLabel = { 'forked': 'Forked', 'pr-open': 'PR Open', 'merged': 'Merged', 'pr-closed': 'Closed', 'error': 'Error' };
   const statusClass = `status-${repo.status}`;
@@ -797,25 +851,32 @@ function Dashboard() {
   const [history, setHistory] = useState([]);
   const [logs, setLogs] = useState([]);
   const [controlEvents, setControlEvents] = useState([]);
+  const [session, setSession] = useState(null);
   const [repos, setRepos] = useState([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [prof, mems, hist, auditLogs, consoleOverview, auditEvents] = await Promise.all([
+      const [prof, mems, hist, auditLogs, consoleOverview, auditEvents, activeSession] = await Promise.all([
         api.get('/api/profile'),
         api.get('/api/memories?limit=50'),
         api.get('/api/history?limit=20'),
         api.get('/api/logs?limit=50'),
         api.get('/api/v1/console/overview'),
         api.get('/api/v1/audit/events?limit=50'),
+        api.get('/api/v1/auth/session'),
       ]);
       setProfile(prof);
       setMemories(mems);
       setHistory(hist);
       setLogs(auditLogs);
-      setOverview(consoleOverview);
+      setSession(activeSession);
+      setOverview({ ...consoleOverview, session: activeSession });
+      if (activeSession?.session?.accountId && activeSession.session.accountId !== accountId) {
+        setAccountIdState(activeSession.session.accountId);
+        setAccountId(activeSession.session.accountId);
+      }
       setControlEvents(auditEvents.events || []);
       setConnected(true);
       setLastUpdate(new Date());
@@ -829,6 +890,20 @@ function Dashboard() {
     setAccountIdState(next);
     setAccountId(next);
     setTimeout(fetchAll, 0);
+  };
+
+  const loginSession = async (nextAccount, email) => {
+    setAccountIdState(nextAccount);
+    setAccountId(nextAccount);
+    const payload = await api.post('/api/v1/auth/login', { accountId: nextAccount, email });
+    setSession({ ok: true, authenticated: true, session: payload.session });
+    await fetchAll();
+  };
+
+  const logoutSession = async () => {
+    await api.post('/api/v1/auth/logout', {});
+    setSession({ ok: true, authenticated: false, session: null });
+    await fetchAll();
   };
 
   const fetchRepos = useCallback(async () => {
@@ -861,6 +936,7 @@ function Dashboard() {
 
   const tabs = [
     { id: 'console', label: 'Console', icon: 'M' },
+    { id: 'session', label: 'Session', icon: 'S' },
     { id: 'brain', label: 'Brain', icon: 'B' },
     { id: 'developer', label: `API Keys (${(overview?.apiKeys || []).length})`, icon: 'K' },
     { id: 'billing', label: 'Billing', icon: '$' },
@@ -918,6 +994,7 @@ function Dashboard() {
 
       {/* Tab Content */}
       {tab === 'console' && <ConsolePanel overview={overview} accountId={accountId} onAccountChange={handleAccountChange} onRefresh={fetchAll} />}
+      {tab === 'session' && <SessionPanel session={session} accountId={accountId} onLogin={loginSession} onLogout={logoutSession} />}
       {tab === 'brain' && <BrainPanel onRefresh={fetchAll} />}
       {tab === 'developer' && <DeveloperPanel apiKeys={overview?.apiKeys || []} onRefresh={fetchAll} />}
       {tab === 'billing' && <BillingPanel overview={overview} onRefresh={fetchAll} />}
