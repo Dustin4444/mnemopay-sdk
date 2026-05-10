@@ -113,6 +113,15 @@ Plan gates should map to product value:
 - Team: seats, higher limits, webhooks, namespace management, private support.
 - Enterprise: SLA, on-prem/region controls, retention contracts, compliance pack.
 
+2026-05-10 metering progress:
+
+- Added `GET /api/v1/usage/report` for account-scoped plan, limit, and usage inspection.
+- Added `GET /api/v1/usage/export` for exportable usage plus recent audit events. Export records `usage.report.exported`.
+- Added mission gates for `brain.write`, `brain.query`, and `rail.charge`. Free is capped at 5 missions, Pro at 100, Team unlimited, Enterprise custom.
+- Over-limit mission calls return HTTP 402 with action, plan, used, and limit details.
+- Dashboard Billing tab now shows usage meter, mission progress, LLM cap, seats, plan-gate state, and usage export preview.
+- Provisioning system seed memory does not count against customer mission usage.
+
 ## Python SDK parity
 
 Minimum parity sequence:

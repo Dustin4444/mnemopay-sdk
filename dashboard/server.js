@@ -206,6 +206,10 @@ function readBody(req) {
   });
 }
 
+function errorJson(res, e, fallbackStatus = 400) {
+  return json(res, { ok: false, error: e.message, details: e.details || undefined }, e.status || fallbackStatus);
+}
+
 function uuid() {
   if (crypto.randomUUID) return crypto.randomUUID();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -298,6 +302,59 @@ function accountPlanFor(accountId) {
   const current = accountPlans.get(accountId);
   if (current) return { ...current, limits: PLAN_CATALOG[current.plan] || PLAN_CATALOG.free };
   return defaultAccountPlan(accountId);
+}
+
+function missionUsage(usage) {
+  return (usage.brainWrites || 0) + (usage.brainQueries || 0) + (usage.railCharges || 0);
+}
+
+class PlanLimitError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.name = 'PlanLimitError';
+    this.status = 402;
+    this.details = details;
+  }
+}
+
+function meteringSnapshot(accountId) {
+  const usage = usageForAccount(accountId);
+  const billing = accountPlanFor(accountId);
+  const limits = billing.limits || PLAN_CATALOG.free;
+  const missionsUsed = missionUsage(usage);
+  const missionLimit = limits.missions;
+  const unlimited = missionLimit === 'unlimited' || missionLimit === 'custom';
+  const missionsRemaining = unlimited ? null : Math.max(0, Number(missionLimit || 0) - missionsUsed);
+  return {
+    accountId,
+    period: 'lifetime-prototype',
+    billing,
+    usage,
+    missions: {
+      used: missionsUsed,
+      limit: missionLimit,
+      remaining: missionsRemaining,
+      overLimit: !unlimited && missionsUsed >= Number(missionLimit || 0),
+    },
+    llmCapCents: limits.llmCapCents,
+    seats: limits.seats,
+    features: limits.features || [],
+  };
+}
+
+function assertPlanAllows(accountId, action) {
+  const snapshot = meteringSnapshot(accountId);
+  const missionActions = new Set(['brain.write', 'brain.query', 'rail.charge']);
+  if (!missionActions.has(action)) return snapshot;
+  if (snapshot.missions.overLimit) {
+    throw new PlanLimitError(`mission limit reached for ${snapshot.billing.plan}`, {
+      action,
+      plan: snapshot.billing.plan,
+      used: snapshot.missions.used,
+      limit: snapshot.missions.limit,
+    });
+  }
+  return snapshot;
 }
 
 function publicApiKey(key) {
@@ -594,9 +651,10 @@ async function storeBrainMemory(body, accountId) {
   const tags = Array.isArray(body.tags) ? body.tags.map((t) => String(t).slice(0, 64)).slice(0, 16) : [];
   const importance = Number.isFinite(Number(body.importance)) ? Math.max(0, Math.min(1, Number(body.importance))) : 0.6;
   const createdAt = new Date().toISOString();
+  if (!body.systemWrite) assertPlanAllows(accountId, 'brain.write');
   const memory = { id, accountId, namespace, content, importance, score: importance, createdAt, lastAccessed: createdAt, accessCount: 0, tags };
   brainMemories.set(id, memory);
-  usageForAccount(accountId).brainWrites++;
+  if (!body.systemWrite) usageForAccount(accountId).brainWrites++;
   recordAudit(accountId, 'brain.memory.created', `brain:${namespace}`, { memoryId: id, namespace, tags, importance });
   if (brain?.embed) {
     await brain.embed(id, content, { accountId, namespace, tags, importance, createdAt });
@@ -640,6 +698,7 @@ async function provisionAccount(body, accountId) {
       content: `Account ${accountId} provisioned on MnemoPay ${PLAN_CATALOG[plan].name} (${interval}). Use this namespace as the default hosted brain for onboarding and first agent memory.`,
       tags: ['provisioning', 'system'],
       importance: 0.85,
+      systemWrite: true,
     }, accountId);
   }
 
@@ -674,6 +733,7 @@ async function queryBrain(body, accountId) {
   const query = String(body.query || '').trim();
   const limit = Math.max(1, Math.min(25, parseInt(body.limit || '8', 10)));
   if (!query) throw new Error('query required');
+  assertPlanAllows(accountId, 'brain.query');
   usageForAccount(accountId).brainQueries++;
   const candidates = Array.from(brainMemories.values()).filter((m) => m.accountId === accountId && m.namespace === namespace);
   if (brain?.search) {
@@ -729,13 +789,14 @@ function onboardingState(accountId) {
   const billing = accountPlanFor(accountId);
   const hasKey = Array.from(apiKeys.values()).some((k) => k.accountId === accountId && !k.revokedAt);
   const hasBrainMemory = Array.from(brainMemories.values()).some((m) => m.accountId === accountId);
+  const hasAuditExport = auditEvents.some((event) => event.accountId === accountId && ['brain.namespace.exported', 'usage.report.exported'].includes(event.action));
   const profileTasks = [
     { id: 'provision-account', label: 'Provision account plan', done: !!billing.provisionedAt || billing.source !== 'default' },
     { id: 'create-api-key', label: 'Create first API key', done: hasKey },
     { id: 'write-brain-memory', label: 'Write first hosted brain memory', done: hasBrainMemory },
     { id: 'run-brain-query', label: 'Run first hosted recall query', done: usage.brainQueries > 0 },
     { id: 'test-payment-rail', label: 'Create first rail hold', done: usage.railCharges > 0 },
-    { id: 'export-audit', label: 'Export first audit bundle', done: false },
+    { id: 'export-audit', label: 'Export first audit bundle', done: hasAuditExport },
   ];
   return {
     accountId,
@@ -796,13 +857,18 @@ const server = http.createServer(async (req, res) => {
 
   // Payments
   if (pathname === '/api/charge' && req.method === 'POST') {
-    const accountId = accountIdForRequest(req);
-    const body = await readBody(req);
-    const tx = await agent.charge(body.amount, body.reason);
-    usageForAccount(accountId).railCharges++;
-    recordAudit(accountId, 'rail.charge.created', `tx:${tx.id || 'unknown'}`, { txId: tx.id, amount: body.amount, reason: body.reason });
-    saveConsoleStore();
-    return json(res, tx, 201);
+    try {
+      const accountId = accountIdForRequest(req);
+      const body = await readBody(req);
+      assertPlanAllows(accountId, 'rail.charge');
+      const tx = await agent.charge(body.amount, body.reason);
+      usageForAccount(accountId).railCharges++;
+      recordAudit(accountId, 'rail.charge.created', `tx:${tx.id || 'unknown'}`, { txId: tx.id, amount: body.amount, reason: body.reason });
+      saveConsoleStore();
+      return json(res, tx, 201);
+    } catch (e) {
+      return errorJson(res, e);
+    }
   }
 
   if (pathname === '/api/settle' && req.method === 'POST') {
@@ -863,6 +929,7 @@ const server = http.createServer(async (req, res) => {
       profile,
       balance,
       usage: usageForAccount(accountId),
+      metering: meteringSnapshot(accountId),
       onboarding: onboardingState(accountId),
       apiKeys: accountKeys.map(publicApiKey),
       brain: {
@@ -912,8 +979,29 @@ const server = http.createServer(async (req, res) => {
       const provisioned = await provisionAccount(body, accountId);
       return json(res, { ok: true, accountId, ...provisioned }, 201);
     } catch (e) {
-      return json(res, { ok: false, error: e.message }, 400);
+      return errorJson(res, e);
     }
+  }
+
+  if (pathname === '/api/v1/usage/report' && req.method === 'GET') {
+    const accountId = accountIdForRequest(req);
+    return json(res, { ok: true, ...meteringSnapshot(accountId) });
+  }
+
+  if (pathname === '/api/v1/usage/export' && req.method === 'GET') {
+    const accountId = accountIdForRequest(req);
+    const report = meteringSnapshot(accountId);
+    const events = auditEvents
+      .filter((event) => event.accountId === accountId)
+      .slice(-200)
+      .map(publicAuditEvent);
+    recordAudit(accountId, 'usage.report.exported', `account:${accountId}`, {
+      period: report.period,
+      missionsUsed: report.missions.used,
+      missionLimit: report.missions.limit,
+    });
+    saveConsoleStore();
+    return json(res, { ok: true, exportedAt: new Date().toISOString(), report, events });
   }
 
   if (pathname === '/api/v1/audit/events' && req.method === 'GET') {
@@ -936,7 +1024,7 @@ const server = http.createServer(async (req, res) => {
       const memory = await storeBrainMemory(body, accountId);
       return json(res, { ok: true, memory }, 201);
     } catch (e) {
-      return json(res, { ok: false, error: e.message }, 400);
+      return errorJson(res, e);
     }
   }
 
@@ -947,7 +1035,7 @@ const server = http.createServer(async (req, res) => {
       const result = await queryBrain(body, accountId);
       return json(res, { ok: true, ...result });
     } catch (e) {
-      return json(res, { ok: false, error: e.message }, 400);
+      return errorJson(res, e);
     }
   }
 

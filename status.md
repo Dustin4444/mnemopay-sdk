@@ -1,4 +1,19 @@
-﻿# mnemopay-sdk status - 2026-05-10 01:58 Codex
+﻿# mnemopay-sdk status - 2026-05-10 02:22 Codex
+
+## Usage metering exports and plan gates added
+
+- Continued the MnemoPay console/app build after billing provisioning.
+- `dashboard/server.js` now has `meteringSnapshot(accountId)` and plan-gate enforcement for mission actions.
+- Added `GET /api/v1/usage/report` for account-scoped plan, limits, usage, remaining missions, LLM cap, seats, and features.
+- Added `GET /api/v1/usage/export` for exportable usage plus recent audit events; export records `usage.report.exported` and now satisfies the onboarding audit-export task.
+- Added HTTP 402 plan gates for `brain.write`, `brain.query`, and `rail.charge`. Free = 5 missions, Pro = 100, Team = unlimited, Enterprise = custom.
+- Provisioning system seed memory no longer counts against customer mission usage.
+- Dashboard Billing tab now shows usage meter, mission progress, LLM cap, seats, plan-gate state, and usage export preview.
+- Validation passed: `node --check dashboard/server.js`; SQLite meter smoke verified Usage Meter UI, Free provision, five allowed mission queries, sixth query blocked with HTTP 402, usage report marked over-limit, usage export returned mission count, and onboarding `export-audit` became done.
+- Next: real Stripe webhook/checkout wiring into `provisionAccount`, then auth/session-backed accounts, then Python hosted client parity.
+
+---
+# mnemopay-sdk status - 2026-05-10 01:58 Codex
 
 ## Billing provisioning primitive added
 
