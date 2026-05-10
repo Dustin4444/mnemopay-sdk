@@ -1,4 +1,15 @@
-﻿# mnemopay-sdk status - 2026-05-10 09:52 Codex
+﻿# mnemopay-sdk status - 2026-05-10 12:35 Codex
+
+## Hosted Python client parity started
+
+- Added `integrations/python-hosted` as a dependency-free Python package for the hosted MnemoPay API.
+- `mnemopay_hosted.py` includes `MnemoPayHostedClient` with Bearer API key auth, optional local account header, JSON error handling, Brain memory/query helpers, namespace export/delete, graph load/rebuild, usage report/export, audit event fetch, and current rail charge/settle helpers.
+- Added README and pyproject for future PyPI packaging as `mnemopay-hosted`.
+- Added stdlib unittest coverage for Bearer-auth memory writes and graph namespace URL encoding.
+- This gives Python agents and Forge services a direct hosted Brain path while MCP integrations remain available.
+
+---
+# mnemopay-sdk status - 2026-05-10 09:52 Codex
 
 ## Hosted Brain graph foundation added
 

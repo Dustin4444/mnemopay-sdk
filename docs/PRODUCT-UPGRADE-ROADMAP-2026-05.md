@@ -159,6 +159,12 @@ Minimum parity sequence:
 
 Python should not try to mirror every internal TypeScript primitive first. It should mirror the production cloud API first, then add offline/local advanced primitives where demand appears.
 
+2026-05-10 Python parity progress:
+
+- Added `integrations/python-hosted`, a dependency-free Python client for the hosted MnemoPay API.
+- The client supports hosted Brain memory write/query, namespace inspect/export/delete, graph export/rebuild, usage report/export, audit events, and current dashboard rail charge/settle calls.
+- The package is designed for Python agent frameworks, Forge NPC services, and backend jobs that need the hosted Brain without going through MCP.
+
 ## SOC 2/compliance path
 
 Start now with lightweight evidence collection. Do not wait until enterprise asks.

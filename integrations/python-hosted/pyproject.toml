@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mnemopay-hosted"
+version = "0.1.0"
+description = "Dependency-free Python client for the hosted MnemoPay API"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{name = "J&B Enterprise LLC", email = "jeremiah@getbizsuite.com"}]
+keywords = ["mnemopay", "ai-agents", "agent-memory", "agent-payments", "audit"]
+
+[tool.setuptools]
+py-modules = ["mnemopay_hosted"]
+
+[project.urls]
+Homepage = "https://github.com/mnemopay/mnemopay-sdk"
+Repository = "https://github.com/mnemopay/mnemopay-sdk/tree/master/integrations/python-hosted"
