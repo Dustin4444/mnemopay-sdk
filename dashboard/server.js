@@ -5,17 +5,35 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync } = require('child_process');
 
 const PORT = process.env.PORT || 3200;
 const GITHUB_USER = process.env.GITHUB_USER || 'mnemopay';
 const GH_CLI = process.env.GH_CLI || 'C:/Program Files/GitHub CLI/gh';
+const BRAIN_AGENT_ID = process.env.MNEMOPAY_BRAIN_AGENT_ID || 'hosted-brain';
+const DEFAULT_PLAN = process.env.MNEMOPAY_PLAN || 'free';
+const DEFAULT_ACCOUNT_ID = process.env.MNEMOPAY_ACCOUNT_ID || 'default';
+const CONSOLE_STORE_PATH = process.env.MNEMOPAY_CONSOLE_STORE || path.join(process.cwd(), '.mnemopay-console', 'console-store.json');
 
 // ── Initialize the real SDK ─────────────────────────────────────────────────
 let agent;
+let brain;
+const brainMemories = new Map();
+const apiKeys = new Map();
+const usageCounters = new Map();
+const auditEvents = [];
 try {
   const SDK = require('../dist/index.js');
   agent = SDK.MnemoPay.quick(process.env.MNEMOPAY_AGENT_ID || 'dashboard-live');
+  const RecallEngine = SDK.RecallEngine || SDK.recall?.RecallEngine;
+  if (RecallEngine) {
+    brain = new RecallEngine({
+      strategy: process.env.MNEMOPAY_BRAIN_STRATEGY || 'hybrid',
+      embeddingProvider: process.env.MNEMOPAY_BRAIN_EMBEDDING || 'local',
+      agentId: BRAIN_AGENT_ID,
+    });
+  }
   console.log('[sdk] MnemoPayLite initialized (live mode)');
 } catch (e) {
   console.error('[sdk] Failed to load SDK:', e.message);
@@ -184,6 +202,219 @@ function readBody(req) {
   });
 }
 
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function hashSecret(secret) {
+  return crypto.createHash('sha256').update(String(secret)).digest('hex');
+}
+
+function blankUsage() {
+  return { brainWrites: 0, brainQueries: 0, railCharges: 0, railSettlements: 0 };
+}
+
+function usageForAccount(accountId) {
+  if (!usageCounters.has(accountId)) usageCounters.set(accountId, blankUsage());
+  return usageCounters.get(accountId);
+}
+
+function publicApiKey(key) {
+  return {
+    id: key.id,
+    accountId: key.accountId,
+    name: key.name,
+    prefix: key.prefix,
+    createdAt: key.createdAt,
+    lastUsedAt: key.lastUsedAt || null,
+    revokedAt: key.revokedAt || null,
+  };
+}
+
+function publicAuditEvent(event) {
+  return {
+    id: event.id,
+    accountId: event.accountId,
+    action: event.action,
+    subject: event.subject,
+    details: event.details || {},
+    createdAt: event.createdAt,
+  };
+}
+
+function recordAudit(accountId, action, subject, details = {}) {
+  const event = {
+    id: `evt_${uuid()}`,
+    accountId,
+    action,
+    subject,
+    details,
+    createdAt: new Date().toISOString(),
+  };
+  auditEvents.push(event);
+  if (auditEvents.length > 5000) auditEvents.splice(0, auditEvents.length - 5000);
+  return event;
+}
+
+function accountIdForRequest(req) {
+  const auth = String(req.headers.authorization || '');
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (m?.[1]) {
+    const keyHash = hashSecret(m[1].trim());
+    const key = Array.from(apiKeys.values()).find((k) => k.keyHash === keyHash && !k.revokedAt);
+    if (key) {
+      key.lastUsedAt = new Date().toISOString();
+      saveConsoleStore();
+      return key.accountId;
+    }
+  }
+  const headerAccount = req.headers['x-mnemopay-account'];
+  return String(Array.isArray(headerAccount) ? headerAccount[0] : headerAccount || DEFAULT_ACCOUNT_ID).slice(0, 120);
+}
+
+function loadConsoleStore() {
+  try {
+    if (!fs.existsSync(CONSOLE_STORE_PATH)) return;
+    const raw = fs.readFileSync(CONSOLE_STORE_PATH, 'utf8');
+    const data = JSON.parse(raw);
+    for (const row of data.apiKeys || []) apiKeys.set(row.id, row);
+    for (const row of data.brainMemories || []) brainMemories.set(row.id, row);
+    for (const row of data.auditEvents || []) auditEvents.push(row);
+    for (const [accountId, usage] of Object.entries(data.usageCounters || {})) {
+      usageCounters.set(accountId, { ...blankUsage(), ...usage });
+    }
+    console.log(`[console-store] loaded ${apiKeys.size} keys, ${brainMemories.size} brain memories, ${auditEvents.length} audit events from ${CONSOLE_STORE_PATH}`);
+  } catch (e) {
+    console.warn(`[console-store] failed to load ${CONSOLE_STORE_PATH}: ${e.message}`);
+  }
+}
+
+function saveConsoleStore() {
+  try {
+    fs.mkdirSync(path.dirname(CONSOLE_STORE_PATH), { recursive: true });
+    const usage = {};
+    for (const [accountId, counters] of usageCounters.entries()) usage[accountId] = counters;
+    fs.writeFileSync(CONSOLE_STORE_PATH, JSON.stringify({
+      version: 1,
+      savedAt: new Date().toISOString(),
+      apiKeys: Array.from(apiKeys.values()),
+      brainMemories: Array.from(brainMemories.values()),
+      auditEvents,
+      usageCounters: usage,
+    }, null, 2));
+  } catch (e) {
+    console.warn(`[console-store] failed to save ${CONSOLE_STORE_PATH}: ${e.message}`);
+  }
+}
+
+function publicBrainMemory(memory) {
+  return {
+    id: memory.id,
+    accountId: memory.accountId,
+    namespace: memory.namespace,
+    content: memory.content,
+    importance: memory.importance,
+    tags: memory.tags,
+    createdAt: memory.createdAt,
+  };
+}
+
+async function storeBrainMemory(body, accountId) {
+  const namespace = String(body.namespace || 'default').slice(0, 120);
+  const content = String(body.content || '').trim();
+  if (!content) throw new Error('content required');
+  const id = body.id ? String(body.id).slice(0, 160) : `mem_${uuid()}`;
+  const tags = Array.isArray(body.tags) ? body.tags.map((t) => String(t).slice(0, 64)).slice(0, 16) : [];
+  const importance = Number.isFinite(Number(body.importance)) ? Math.max(0, Math.min(1, Number(body.importance))) : 0.6;
+  const createdAt = new Date().toISOString();
+  const memory = { id, accountId, namespace, content, importance, score: importance, createdAt, lastAccessed: createdAt, accessCount: 0, tags };
+  brainMemories.set(id, memory);
+  usageForAccount(accountId).brainWrites++;
+  recordAudit(accountId, 'brain.memory.created', `brain:${namespace}`, { memoryId: id, namespace, tags, importance });
+  if (brain?.embed) {
+    await brain.embed(id, content, { accountId, namespace, tags, importance, createdAt });
+  }
+  saveConsoleStore();
+  return publicBrainMemory(memory);
+}
+
+async function queryBrain(body, accountId) {
+  const namespace = String(body.namespace || 'default').slice(0, 120);
+  const query = String(body.query || '').trim();
+  const limit = Math.max(1, Math.min(25, parseInt(body.limit || '8', 10)));
+  if (!query) throw new Error('query required');
+  usageForAccount(accountId).brainQueries++;
+  const candidates = Array.from(brainMemories.values()).filter((m) => m.accountId === accountId && m.namespace === namespace);
+  if (brain?.search) {
+    const results = await brain.search(query, candidates, limit);
+    recordAudit(accountId, 'brain.query', `brain:${namespace}`, { namespace, query, limit, resultCount: results.length });
+    saveConsoleStore();
+    return {
+      namespace,
+      query,
+      count: results.length,
+      results: results.map((r) => ({
+        id: r.id,
+        content: r.content,
+        importance: r.importance,
+        score: r.combinedScore ?? r.score,
+        tags: r.tags,
+      })),
+    };
+  }
+  const terms = query.toLowerCase().split(/\W+/).filter(Boolean);
+  const scored = candidates
+    .map((m) => ({
+      ...m,
+      score: terms.reduce((sum, term) => sum + (m.content.toLowerCase().includes(term) ? 1 : 0), 0) + m.importance,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+  recordAudit(accountId, 'brain.query', `brain:${namespace}`, { namespace, query, limit, resultCount: scored.length });
+  saveConsoleStore();
+  return { namespace, query, count: scored.length, results: scored.map(publicBrainMemory) };
+}
+
+function createApiKey(accountId, name = 'default') {
+  const secret = `mnemo_${crypto.randomBytes(32).toString('base64url')}`;
+  const key = {
+    id: `key_${uuid()}`,
+    accountId,
+    name: String(name).slice(0, 64),
+    prefix: secret.slice(0, 14),
+    keyHash: hashSecret(secret),
+    createdAt: new Date().toISOString(),
+    lastUsedAt: null,
+    revokedAt: null,
+  };
+  apiKeys.set(key.id, key);
+  recordAudit(accountId, 'api_key.created', `api_key:${key.id}`, { keyId: key.id, name: key.name, prefix: key.prefix });
+  saveConsoleStore();
+  return { ...key, secret };
+}
+
+function onboardingState(accountId) {
+  const usage = usageForAccount(accountId);
+  const hasKey = Array.from(apiKeys.values()).some((k) => k.accountId === accountId && !k.revokedAt);
+  const hasBrainMemory = Array.from(brainMemories.values()).some((m) => m.accountId === accountId);
+  const profileTasks = [
+    { id: 'create-api-key', label: 'Create first API key', done: hasKey },
+    { id: 'write-brain-memory', label: 'Write first hosted brain memory', done: hasBrainMemory },
+    { id: 'run-brain-query', label: 'Run first hosted recall query', done: usage.brainQueries > 0 },
+    { id: 'test-payment-rail', label: 'Create first rail hold', done: usage.railCharges > 0 },
+    { id: 'export-audit', label: 'Export first audit bundle', done: false },
+  ];
+  return {
+    accountId,
+    plan: DEFAULT_PLAN,
+    complete: profileTasks.every((task) => task.done),
+    tasks: profileTasks,
+  };
+}
+
+loadConsoleStore();
+
 // ── Server ──────────────────────────────────────────────────────────────────
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 
@@ -232,14 +463,24 @@ const server = http.createServer(async (req, res) => {
 
   // Payments
   if (pathname === '/api/charge' && req.method === 'POST') {
+    const accountId = accountIdForRequest(req);
     const body = await readBody(req);
     const tx = await agent.charge(body.amount, body.reason);
+    usageForAccount(accountId).railCharges++;
+    recordAudit(accountId, 'rail.charge.created', `tx:${tx.id || 'unknown'}`, { txId: tx.id, amount: body.amount, reason: body.reason });
+    saveConsoleStore();
     return json(res, tx, 201);
   }
 
   if (pathname === '/api/settle' && req.method === 'POST') {
+    const accountId = accountIdForRequest(req);
     const body = await readBody(req);
     const tx = await agent.settle(body.txId);
+    if (tx) {
+      usageForAccount(accountId).railSettlements++;
+      recordAudit(accountId, 'rail.charge.settled', `tx:${body.txId}`, { txId: body.txId });
+      saveConsoleStore();
+    }
     return json(res, tx || { error: 'Transaction not found or not pending' });
   }
 
@@ -270,6 +511,133 @@ const server = http.createServer(async (req, res) => {
     const limit = parseInt(url.searchParams.get('limit') || '30');
     const logs = await agent.logs(limit);
     return json(res, logs);
+  }
+
+  // Console/app surface
+  if (pathname === '/api/v1/console/overview' && req.method === 'GET') {
+    const accountId = accountIdForRequest(req);
+    const profile = await agent.profile();
+    const balance = await agent.balance();
+    const accountKeys = Array.from(apiKeys.values()).filter((key) => key.accountId === accountId);
+    const accountMemories = Array.from(brainMemories.values()).filter((memory) => memory.accountId === accountId);
+    return json(res, {
+      ok: true,
+      accountId,
+      positioning: 'brain, wallet, and audit trail for AI agents',
+      plan: DEFAULT_PLAN,
+      profile,
+      balance,
+      usage: usageForAccount(accountId),
+      onboarding: onboardingState(accountId),
+      apiKeys: accountKeys.map(publicApiKey),
+      brain: {
+        mode: brain ? 'recall-engine' : 'fallback',
+        namespaces: Array.from(new Set(accountMemories.map((m) => m.namespace))).length,
+        memories: accountMemories.length,
+      },
+    });
+  }
+
+  if (pathname === '/api/v1/developer/api-keys' && req.method === 'GET') {
+    const accountId = accountIdForRequest(req);
+    return json(res, { ok: true, accountId, keys: Array.from(apiKeys.values()).filter((key) => key.accountId === accountId).map(publicApiKey) });
+  }
+
+  if (pathname.startsWith('/api/v1/developer/api-keys/') && pathname.endsWith('/revoke') && req.method === 'POST') {
+    const accountId = accountIdForRequest(req);
+    const keyId = pathname.split('/')[5];
+    const key = apiKeys.get(keyId);
+    if (!key || key.accountId !== accountId) return json(res, { ok: false, error: 'API key not found' }, 404);
+    if (!key.revokedAt) {
+      key.revokedAt = new Date().toISOString();
+      recordAudit(accountId, 'api_key.revoked', `api_key:${key.id}`, { keyId: key.id, name: key.name, prefix: key.prefix });
+      saveConsoleStore();
+    }
+    return json(res, { ok: true, key: publicApiKey(key) });
+  }
+
+  if (pathname === '/api/v1/developer/api-keys' && req.method === 'POST') {
+    const accountId = accountIdForRequest(req);
+    const body = await readBody(req);
+    const key = createApiKey(accountId, body.name || 'default');
+    const { secret } = key;
+    const publicKey = publicApiKey(key);
+    return json(res, { ok: true, key: publicKey, secret, warning: 'Store this secret now. MnemoPay will not show it again.' }, 201);
+  }
+
+  if (pathname === '/api/v1/billing/onboarding' && req.method === 'GET') {
+    const accountId = accountIdForRequest(req);
+    return json(res, { ok: true, ...onboardingState(accountId), usage: usageForAccount(accountId) });
+  }
+
+  if (pathname === '/api/v1/audit/events' && req.method === 'GET') {
+    const accountId = accountIdForRequest(req);
+    const limit = Math.max(1, Math.min(200, parseInt(url.searchParams.get('limit') || '50', 10)));
+    const events = auditEvents
+      .filter((event) => event.accountId === accountId)
+      .slice(-limit)
+      .reverse()
+      .map(publicAuditEvent);
+    return json(res, { ok: true, accountId, events });
+  }
+
+  // Hosted Brain API prototype. This is the contract that becomes the
+  // production brain service once auth + persistent storage are wired.
+  if (pathname === '/api/v1/brain/memories' && req.method === 'POST') {
+    try {
+      const accountId = accountIdForRequest(req);
+      const body = await readBody(req);
+      const memory = await storeBrainMemory(body, accountId);
+      return json(res, { ok: true, memory }, 201);
+    } catch (e) {
+      return json(res, { ok: false, error: e.message }, 400);
+    }
+  }
+
+  if (pathname === '/api/v1/brain/query' && req.method === 'POST') {
+    try {
+      const accountId = accountIdForRequest(req);
+      const body = await readBody(req);
+      const result = await queryBrain(body, accountId);
+      return json(res, { ok: true, ...result });
+    } catch (e) {
+      return json(res, { ok: false, error: e.message }, 400);
+    }
+  }
+
+  if (pathname.startsWith('/api/v1/brain/namespaces/') && !pathname.endsWith('/export') && req.method === 'GET') {
+    const accountId = accountIdForRequest(req);
+    const namespace = decodeURIComponent(pathname.split('/').pop() || 'default');
+    const rows = Array.from(brainMemories.values()).filter((m) => m.accountId === accountId && m.namespace === namespace);
+    const lastWrite = rows.map((m) => m.createdAt).sort().pop() || null;
+    return json(res, { ok: true, accountId, namespace, memoryCount: rows.length, lastWrite, mode: brain ? 'recall-engine' : 'fallback' });
+  }
+
+  if (pathname.startsWith('/api/v1/brain/namespaces/') && pathname.endsWith('/export') && req.method === 'GET') {
+    const accountId = accountIdForRequest(req);
+    const namespace = decodeURIComponent(pathname.split('/')[5] || 'default');
+    const rows = Array.from(brainMemories.values())
+      .filter((m) => m.accountId === accountId && m.namespace === namespace)
+      .map(publicBrainMemory);
+    recordAudit(accountId, 'brain.namespace.exported', `brain:${namespace}`, { namespace, memoryCount: rows.length });
+    saveConsoleStore();
+    return json(res, { ok: true, accountId, namespace, exportedAt: new Date().toISOString(), memories: rows });
+  }
+
+  if (pathname.startsWith('/api/v1/brain/namespaces/') && req.method === 'DELETE') {
+    const accountId = accountIdForRequest(req);
+    const namespace = decodeURIComponent(pathname.split('/').pop() || 'default');
+    let deleted = 0;
+    for (const [id, memory] of brainMemories.entries()) {
+      if (memory.accountId === accountId && memory.namespace === namespace) {
+        brainMemories.delete(id);
+        if (brain?.remove) brain.remove(id);
+        deleted++;
+      }
+    }
+    recordAudit(accountId, 'brain.namespace.deleted', `brain:${namespace}`, { namespace, deleted });
+    saveConsoleStore();
+    return json(res, { ok: true, accountId, namespace, deleted });
   }
 
   // GitHub repos
@@ -305,5 +673,6 @@ server.listen(PORT, () => {
   console.log(`  Agent:   ${agent.agentId || 'dashboard-live'}`);
   console.log(`  Mode:    Live (real SDK)`);
   console.log(`  API:     /api/memories, /api/charge, /api/settle, /api/repos`);
+  console.log(`  Brain:   /api/v1/brain/memories, /api/v1/brain/query`);
   console.log(`  Repos:   ${MONITORED_REPOS.length} monitored\n`);
 });

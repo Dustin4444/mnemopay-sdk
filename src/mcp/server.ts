@@ -2191,9 +2191,7 @@ export default function createSandboxServer(): Server {
   return server;
 }
 
-// Auto-start when run directly
-const isDirectRun = process.argv[1]?.includes("mcp") || process.argv.includes("--start");
-if (isDirectRun) {
+if (require.main === module) {
   startServer().catch((err) => {
     console.error("Failed to start MCP server:", err);
     process.exit(1);

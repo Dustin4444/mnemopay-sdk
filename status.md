@@ -1,15 +1,128 @@
-# mnemopay-sdk status — 2026-05-08
+﻿# mnemopay-sdk status - 2026-05-10 00:28 Codex
+
+## Console control layer added: revoke, export, audit events
+
+- Continued the MnemoPay console/app upgrade control layer.
+- `dashboard/server.js` now has persisted, account-scoped audit events in the console store.
+- Audit events are recorded for: `api_key.created`, `api_key.revoked`, `brain.memory.created`, `brain.query`, `brain.namespace.exported`, `brain.namespace.deleted`, `rail.charge.created`, and `rail.charge.settled`.
+- Added `POST /api/v1/developer/api-keys/:id/revoke`. Revoked keys keep public metadata but no longer resolve Bearer auth.
+- Added `GET /api/v1/brain/namespaces/:id/export` for namespace-level export. Export writes an audit event and returns account-scoped memories.
+- Added `GET /api/v1/audit/events?limit=50` for account-scoped audit inspection.
+- Updated `docs/PRODUCT-UPGRADE-ROADMAP-2026-05.md` with the control-layer endpoints and validation notes.
+- Validation: `node --check dashboard/server.js` passed. Control-layer smoke passed on temp store/port: namespace export returned 1 memory, audit had 4 events before revoke, revoke set `revokedAt`, revoked Bearer fell back to `default`, audit events survived restart, and export/revoke events were present after restart.
+- Next recommended build: UI panels over `/api/v1/console/overview`, `/api/v1/developer/api-keys`, `/api/v1/brain/*`, and `/api/v1/audit/events`, then move JSON store toward DB/Neon.
+
+---
+# mnemopay-sdk status - 2026-05-10 00:16 Codex
+
+## Console persistence + account scoping landed
+
+- Continued the MnemoPay app/hosted brain upgrade after user said "go ahead".
+- `dashboard/server.js` now persists console state to `MNEMOPAY_CONSOLE_STORE` or `.mnemopay-console/console-store.json` by default.
+- Added `.mnemopay-console/` to `.gitignore` so local persisted console state and hashed keys do not get committed.
+- API keys are now account-scoped and persisted as SHA-256 hashes with a public prefix only. Raw `mnemo_...` secrets are returned once and are not written to the store.
+- `Authorization: Bearer mnemo_...` now resolves the account from the stored key hash. Without a bearer key, routes fall back to `X-MnemoPay-Account`, then `MNEMOPAY_ACCOUNT_ID`, then `default`.
+- Hosted brain memories are now account-scoped and persisted. Namespace inspect/delete only affects the active account.
+- Usage counters are now per-account and persisted: brain writes, brain queries, rail charges, rail settlements.
+- Onboarding state is now account-aware: API key created, hosted brain memory written, recall query run, rail hold created, audit export still pending.
+- Updated `docs/PRODUCT-UPGRADE-ROADMAP-2026-05.md` with 2026-05-10 progress notes.
+- Validation: `node --check dashboard/server.js` passed. Restart smoke passed on a temporary store: key + brain memory survived restart, bearer auth resolved `acct-smoke`, recall returned 1 result, and the raw API secret was not present in the store file.
+- Remaining production work: replace JSON store with DB/Neon-backed persistent service, add real user auth/session model, add API key revoke endpoint, add namespace export/audit logs, wire UI panels over `/api/v1/*`, and continue Python hosted-client parity.
+
+---
+# mnemopay-sdk status - 2026-05-09 23:54 Codex
+
+## MnemoPay app/hosted brain upgrade started
+
+- Added canonical upgrade roadmap: `docs/PRODUCT-UPGRADE-ROADMAP-2026-05.md`.
+- Added SOC 2 prep checklist: `ops/SOC2-PREP-2026-05.md`.
+- Extended `dashboard/server.js` with the first production-style `/api/v1` app surface:
+  - `GET /api/v1/console/overview`
+  - `GET/POST /api/v1/developer/api-keys`
+  - `GET /api/v1/billing/onboarding`
+  - `POST /api/v1/brain/memories`
+  - `POST /api/v1/brain/query`
+  - `GET/DELETE /api/v1/brain/namespaces/:id`
+- Added in-process usage counters for brain writes, brain queries, rail charges, and rail settlements. This is a prototype counter, not production persistence.
+- API key creation currently stores keys in memory and returns the secret once. Production next step is hashed persistent storage + account scoping.
+- Hosted brain API currently stores memories in memory and uses `RecallEngine` when available from built SDK, with fallback lexical recall. Production next step is auth + Neon/pgvector adapter + namespace retention/deletion audit.
+- Smoke validation passed on alternate port `3299`: console overview, API key creation, brain memory write, and brain query all returned ok.
+- Positioning locked for next public pass: "MnemoPay is the brain, wallet, and audit trail for AI agents that handle money." Do not use broad "agent OS" copy publicly until hosted console/API are stronger.
+
+---
+# mnemopay-sdk status â€” 2026-05-09 (end of session)
+
+## SDK alpha.2 published - MCP import footgun fixed
+
+- **`@mnemopay/sdk@1.6.0-alpha.2` PUBLISHED to npm under `alpha` dist-tag.** Public npm state verified: `latest` remains `1.5.0`; `alpha` now points to `1.6.0-alpha.2`.
+- Fixed `src/mcp/server.ts` startup behavior so the MCP server only starts when the server module is executed directly. Importing SDK modules from another MCP process no longer auto-starts MnemoPay MCP inside that consumer process.
+- Added regression coverage in `tests/mcp-import.test.ts` for consumer import behavior where another MCP process imports the SDK.
+- README now documents safer subpath imports such as `@mnemopay/sdk/recall`, `@mnemopay/sdk/rails`, `@mnemopay/sdk/storage`, and `@mnemopay/sdk/commerce`.
+- Validation: `npx vitest run tests/mcp-import.test.ts` passed, `npm run build` passed, `npm pack --dry-run` passed, and `npm publish --tag alpha` passed. Full `npm test` was attempted twice and timed out after about 15 minutes without returning a failure signal.
+- Publish note: npm normalized `repository.url` during publish; `npm pkg fix` was run locally after publish to keep package metadata aligned.
+
+## ðŸ§  BRAIN DISCOVERED â€” MnemoPay's identity expands
+
+`src/recall/{entities,graph,hyde,rerank,summarizer}.ts` + `src/reasoning/post-processor.ts` form a reasoning + recall layer on top of memory. With governance, identity, payments, and now reasoning, MnemoPay has 5 layers no competitor combines.
+
+**Repositioning candidate (PENDING senior signoff â€” don't push to public site):**
+> "MnemoPay â€” the operating system for AI agents."
+
+**Forward-looking integration sketched:** wire the brain into `@blackpig/forge` so NPCs remember+reason across sessions. See `~/.claude/projects/C--WINDOWS-system32/memory/project_brain_forge_integration.md`. Implementation ~3-5 days for Codex/terminal.
+
+## External brain consumer repo SHIPPED â€” first real-world dogfood of `@mnemopay/sdk/recall`
+
+Distinct from the SDK-internal brain layer above: a personal nervous system at `C:\Users\bizsu\Projects\brain` (separate repo, MIT-licensed by Jeremiah privately) that *imports* the SDK as a regular consumer. Markdown source-of-record + sqlite recall index.
+
+- Imports: `import { localEmbed, cosineSimilarity, RecallEngine } from "@mnemopay/sdk/recall"` (subpath, not root â€” see bug below)
+- Stack: Bun + `bun:sqlite` (no native binding hell), `@modelcontextprotocol/sdk` for stdio MCP, `gray-matter` for frontmatter
+- **243 pages** seeded from existing memory in one shot â€” first time `localEmbed` is exercised at 3-figure-page scale outside the SDK's own tests, no precision loss observed
+- `brain serve --mcp` exposes 5 tools: `brain_query`, `brain_get_page`, `brain_list_pages`, `brain_status`, `brain_ingest`. Bundle 2.11 MB
+- Strategic: this is the case study post for `@mnemopay/sdk/recall`. "I built a personal brain in a weekend, dogfooded the recall engine at scale, and here's the perf data" is the content angle. Marketing handoff candidate.
+- Phase 1 next (~4.5 hr): skills system, LLM-enriched entity extraction (Sonnet 4.5 via OpenRouter ~$2 for 255 files), book-mirror skill (Garry Tan's killer pattern)
+- Full record: `~/.claude/projects/C--WINDOWS-system32/memory/project_session_2026_05_09_brain_build.md`
+
+### SDK bug found while building it â€” subpath import workaround
+
+- Importing from `@mnemopay/sdk` root pulls in `dist/mcp/server.js`, which has top-level startup code that runs on module evaluation. Side effects: `[mnemopay-mcp] Tool filter: 14/40 tools exposed` + `[mnemopay-mcp] Server started (stdio mode)` print to **the consumer's stderr**. Catastrophic if the consumer is itself a stdio MCP (the brain) â€” both servers' JSON-RPC frames hit the same client.
+- Consumer-side workaround: subpath import `@mnemopay/sdk/recall`. Bundle 5.57 MB â†’ 2.11 MB; stderr clean.
+- **Real fix for next SDK release**: wrap `src/mcp/server.ts` startup in `if (require.main === module)` so it only auto-starts when invoked via the `mnemopay-mcp` bin, not when imported. Add subpath imports as the documented default in README.
+- Operational rule: `~/.claude/projects/C--WINDOWS-system32/memory/feedback_mnemopay_sdk_subpath_import.md` (mirrored to `~/.codex/memories/claude/`)
+
+## End-of-session totals (2026-05-09)
+
+- **22 X posts + 12 Dev.to articles published live** today on `@mnemopay` and `dev.to/t49qnsx7qtkpanks` (via the multi-tenant SMM pipeline)
+- **`@mnemopay/coding-agent@0.2.0`** published to npm (renamed from `@kpanks/coding-agent@0.1.0`)
+- All hunter/writer compute on OpenRouter â€” daily steady-state $0.65 for both BizSuite + MnemoPay self-tenants combined
+
+## MnemoPay outbound now runs via multi-tenant SMM (Claude main)
+
+- MnemoPay onboarded as self-tenant client `d3858acf-5aed-4675-94a1-2f12f81d613c` in `bizsuite-site/social-manager/social-manager.db`
+- Daily Perplexity-Sonar-Pro hunter at 00:15 â†’ Sonnet-4.5 writer at 01:30 â†’ publisher to `@mnemopay` X + Dev.to at 09:30
+- 25 trend signals + 46 approved drafts (25 X + 21 Dev.to) ready to ship 2026-05-10 morning
+- All writer/hunter compute on OpenRouter â€” no Anthropic credits required
+- `mnemopay-sdk/marketing/post.mjs --handle mnemopay` is the X poster the publisher spawns; uses TWITTER_MNEMOPAY_* per-handle creds in `mnemopay-sdk/.env`
+
+## Coordination
+
+The bizsuite-site `social-manager/` orchestrator is **the canonical SMM** for all of Jeremiah's brands. Don't build a parallel social pipeline in mnemopay-sdk. The autopost.js + post.mjs in mnemopay-sdk/marketing/ remain â€” they're the underlying X poster the SMM publisher spawns into.
+
+See `bizsuite-site/status.md` and `~/.claude/projects/.../memory/project_session_2026_05_09_smm_pipeline_meta.md` for full picture.
+
+---
+
+# mnemopay-sdk status â€” 2026-05-08
 
 ## Shipped today
 
 ### Packages
 
-- **`@mnemopay/sdk@1.6.0-alpha.1` PUBLISHED to npm under `alpha` dist-tag.** `latest` still `1.5.0` — stable users see no change. Tag `v1.6.0-alpha.1` pushed to origin (commit `3863163`).
-  - **`X402Rail`** — Coinbase x402 protocol (HTTP 402 Payment Required revival). USDC on Base L2 via EIP-3009 `transferWithAuthorization`. Pluggable `X402Signer` (bring-your-own viem/ethers/noble). Hold = signed authorization (not broadcast); capture = facilitator HTTP submit; reverse pre-capture = `reversed`, post-capture = `irreversible`. **38/38 tests.**
-  - **`GoogleAP2Rail`** — Google Agent Payment Protocol (FIDO Alliance, AP2 v0.2 Human-Not-Present). Mandate VC + Intent VC + HTTP settlement. Pre-flight policy enforcement (caps, expiry, currency match, allowed-recipients) **before any signature is produced** — defense-in-depth. **41/41 tests.**
+- **`@mnemopay/sdk@1.6.0-alpha.1` PUBLISHED to npm under `alpha` dist-tag.** `latest` still `1.5.0` â€” stable users see no change. Tag `v1.6.0-alpha.1` pushed to origin (commit `3863163`).
+  - **`X402Rail`** â€” Coinbase x402 protocol (HTTP 402 Payment Required revival). USDC on Base L2 via EIP-3009 `transferWithAuthorization`. Pluggable `X402Signer` (bring-your-own viem/ethers/noble). Hold = signed authorization (not broadcast); capture = facilitator HTTP submit; reverse pre-capture = `reversed`, post-capture = `irreversible`. **38/38 tests.**
+  - **`GoogleAP2Rail`** â€” Google Agent Payment Protocol (FIDO Alliance, AP2 v0.2 Human-Not-Present). Mandate VC + Intent VC + HTTP settlement. Pre-flight policy enforcement (caps, expiry, currency match, allowed-recipients) **before any signature is produced** â€” defense-in-depth. **41/41 tests.**
   - Conflict resolution on master merge: kept both rail re-export blocks in `src/rails/index.ts` and `src/index.ts` (independent rails).
 
-- **`mnemopay@1.0.0b4` PUBLISHED to PyPI** ([pypi.org/project/mnemopay/1.0.0b4](https://pypi.org/project/mnemopay/1.0.0b4/)). Python rail port — mirrors the TypeScript `PaymentRail` interface. Sync API.
+- **`mnemopay@1.0.0b4` PUBLISHED to PyPI** ([pypi.org/project/mnemopay/1.0.0b4](https://pypi.org/project/mnemopay/1.0.0b4/)). Python rail port â€” mirrors the TypeScript `PaymentRail` interface. Sync API.
   - `mnemopay.rails`: `PaymentRail` Protocol, `PaymentRailResult`, `HoldOptions`, `MockRail`, `StripeRail`
   - `StripeRail`: lazy `import stripe` peer-dep, `from_client()` for tests, threading.Lock-based capture race-protection, idempotency-key forwarding, `create_customer` + `create_setup_intent` helpers
   - 29 new rail tests; full suite 422/422 green
@@ -19,38 +132,41 @@
 
 - **mnemopay-sdk README** rewritten: governance pivot frame ("the governance layer for AI agents that handle money"), v1.6.0-alpha rails table, "What MnemoPay is NOT" callout, 6-rail Payment Rails section (3 stable + 3 alpha), updated architecture diagram with governance + spatial rows.
 - **mnemopay-python README** rewritten: governance pivot, payment rails section with code examples, TS-vs-Python compatibility matrix.
-- **mnemopay.com** — Today/Roadmap chip block reorganized into 3 tiers: Stable (`latest` v1.5.0), Preview (`alpha` v1.6.0-alpha.1, all 3 alpha rails marked `· shipped`), Roadmap (Visa IC + Mastercard pending acquirer). Meta description updated. Deployed to Vercel prod (alias `mnemopay.com` confirmed live).
+- **mnemopay.com** â€” Today/Roadmap chip block reorganized into 3 tiers: Stable (`latest` v1.5.0), Preview (`alpha` v1.6.0-alpha.1, all 3 alpha rails marked `Â· shipped`), Roadmap (Visa IC + Mastercard pending acquirer). Meta description updated. Deployed to Vercel prod (alias `mnemopay.com` confirmed live).
 
 ### Test posture
-- TypeScript suite: **1019/1020** (1 unrelated stress-test perf flake — p99 605ms vs 500ms target, Windows-load sensitive)
+- TypeScript suite: **1019/1020** (1 unrelated stress-test perf flake â€” p99 605ms vs 500ms target, Windows-load sensitive)
 - Python suite: **422/422**
 
 ### Site + chat infrastructure (PM session 2026-05-08)
 
 - **mnemopay.com & getbizsuite.com chatbots LIVE.** Both stream through OpenRouter (`anthropic/claude-haiku-4-5`) with single shared API key.
   - mnemopay: new Vercel Edge Function `api/chat.js` + `chat-widget.js` floating drawer, wired into all 6 pages
-  - bizsuite: existing `server.js` upgraded — OpenRouter primary → Anthropic fallback → local canned reply; widget cloned with gold palette, wired into 7 pages
-  - OpenRouter balance ~$10 — sufficient for current volume; both chats fall to canned replies if it hits zero
+  - bizsuite: existing `server.js` upgraded â€” OpenRouter primary â†’ Anthropic fallback â†’ local canned reply; widget cloned with gold palette, wired into 7 pages
+  - OpenRouter balance ~$10 â€” sufficient for current volume; both chats fall to canned replies if it hits zero
 - **ASCII fish-pond hero (v3, "graceful + subtle")** replaces v2 cursor-tracking governed-field. Three "less bold" iterations dialed it to font-weight 350, opacity 0.55, no drop-shadow, head 0.55, tail 0.42. Same fish on both sites with palette swap.
-- **Pricing alignment.** MnemoPay Enterprise $299/mo → Custom (Contact sales — $299 + 99.95% SLA was unfundable, page was lying). BizSuite committed numbers: Sprint $9,500, Systems $4,950, Plugin Licensing $997/$1,997/$2,497, Fractional Ops $3,500/mo. Orphan $299 refs purged from `pricing.html` CTA, `terms.html` Section 3, `llms.txt`.
+- **Pricing alignment.** MnemoPay Enterprise $299/mo â†’ Custom (Contact sales â€” $299 + 99.95% SLA was unfundable, page was lying). BizSuite committed numbers: Sprint $9,500, Systems $4,950, Plugin Licensing $997/$1,997/$2,497, Fractional Ops $3,500/mo. Orphan $299 refs purged from `pricing.html` CTA, `terms.html` Section 3, `llms.txt`.
 - **BizSuite cleanup**: removed `$ whoami`, BIZSUITE block-letter ASCII, 3 floating panels, identity layer, hero-signature, cta-canvas spheres + dead JS/CSS (~150KB transfer saved).
 - **Subtitle visibility fix** on mnemopay homepage: removed `.reveal` (was stuck at opacity:0 waiting for fragile GSAP ScrollTrigger), brightened color, bolded Charter/FiscalGate/Article 12.
 - Full record: `~/.claude/projects/C--WINDOWS-system32/memory/project_session_2026_05_08_chat_pricing_design.md`
 
 ## In progress
-- (none — chat + pricing landing closed)
+- (none â€” chat + pricing landing closed)
 
 ## Blocked
-- **`@mnemopay/sdk@1.6.0` (latest)** — gated on real-world alpha.1 feedback. Promote `alpha` → `latest` once external integrators have run x402/AP2 against live facilitators / merchant endpoints.
-- **Visa IC, Mastercard Agent Suite rails** — pending acquirer access (no engineering work).
+- **`@mnemopay/sdk@1.6.0` (latest)** â€” gated on real-world alpha.1 feedback. Promote `alpha` â†’ `latest` once external integrators have run x402/AP2 against live facilitators / merchant endpoints.
+- **Visa IC, Mastercard Agent Suite rails** â€” pending acquirer access (no engineering work).
 
 ## Next session
 - **Jeremiah's queued actions** (gating chat + ad campaign):
-  - Archive Stripe Buy Button `9B63co8HNehxcCQ5SPbo40a` ($299 Enterprise — orphan)
+  - Archive Stripe Buy Button `9B63co8HNehxcCQ5SPbo40a` ($299 Enterprise â€” orphan)
   - Replace `__META_PIXEL_ID__` + `GTM-XXXXXXX` placeholders (~18 occurrences across both sites) with real Meta + GTM IDs
-  - Configure 3 Stripe Buy Button success URLs → `/thanks?tier=...&session_id={CHECKOUT_SESSION_ID}`
+  - Configure 3 Stripe Buy Button success URLs â†’ `/thanks?tier=...&session_id={CHECKOUT_SESSION_ID}`
   - Top up OpenRouter when ~$10 balance runs low
 - Decide on a **Python parity expansion plan**: at minimum port `PaystackRail` + `LightningRail` to match TS feature surface, then evaluate StripeMPP / x402 / AP2 in Python.
-- **Console v0.2** — auth, live data wiring (currently mock), real charter editor.
-- Explore **promoting `alpha` → `latest`** once external integrators confirm x402/AP2 work end-to-end against live counterparties.
-- **SOC 2 Type II** ops process (Q3 2026 Vanta start, Q1 2027 audit) — separate workstream.
+- **Console v0.2** â€” auth, live data wiring (currently mock), real charter editor.
+- Explore **promoting `alpha` â†’ `latest`** once external integrators confirm x402/AP2 work end-to-end against live counterparties.
+- **SOC 2 Type II** ops process (Q3 2026 Vanta start, Q1 2027 audit) â€” separate workstream.
+
+
+

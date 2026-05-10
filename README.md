@@ -53,6 +53,19 @@ npm install @mnemopay/sdk@alpha
 
 The `latest` dist-tag still points at `1.5.0` — stable users see no change. Promote `alpha` → `latest` when v1.6.0 ships.
 
+### Subpath imports for smaller, safer consumers
+
+If you only need one MnemoPay module, import that subpath instead of the package root. This keeps MCP servers and other stdio tools quiet, avoids pulling unused middleware into bundles, and makes the dependency boundary obvious.
+
+```ts
+import { localEmbed, cosineSimilarity } from "@mnemopay/sdk/recall";
+import { StripeRail, X402Rail } from "@mnemopay/sdk/rails";
+import { SQLiteStorage } from "@mnemopay/sdk/storage";
+import { CommerceEngine } from "@mnemopay/sdk/commerce";
+```
+
+Use the root import when you want the full SDK surface. Use `@mnemopay/sdk/mcp` only when you are intentionally mounting the MnemoPay MCP server.
+
 ---
 
 ## Building an MCP server? Start here.
