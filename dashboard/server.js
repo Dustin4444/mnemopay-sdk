@@ -206,6 +206,14 @@ function readBody(req) {
   });
 }
 
+function readRawBody(req) {
+  return new Promise((resolve) => {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => resolve(body));
+  });
+}
+
 function errorJson(res, e, fallbackStatus = 400) {
   return json(res, { ok: false, error: e.message, details: e.details || undefined }, e.status || fallbackStatus);
 }
@@ -355,6 +363,54 @@ function assertPlanAllows(accountId, action) {
     });
   }
   return snapshot;
+}
+
+function verifyStripeWebhookSignature(rawBody, signatureHeader, secret, toleranceSeconds = 300) {
+  if (!secret) return { ok: true, mode: 'unsigned-dev' };
+  const parts = String(signatureHeader || '').split(',').reduce((acc, part) => {
+    const [key, value] = part.split('=');
+    if (key && value) {
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(value);
+    }
+    return acc;
+  }, {});
+  const timestamp = Number(parts.t?.[0]);
+  if (!timestamp || Math.abs(Math.floor(Date.now() / 1000) - timestamp) > toleranceSeconds) {
+    return { ok: false, reason: 'timestamp outside tolerance' };
+  }
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(`${timestamp}.${rawBody}`)
+    .digest('hex');
+  const signatures = parts.v1 || [];
+  const ok = signatures.some((sig) => {
+    try {
+      return crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'));
+    } catch {
+      return false;
+    }
+  });
+  return ok ? { ok: true, mode: 'verified' } : { ok: false, reason: 'signature mismatch' };
+}
+
+function provisioningBodyFromStripeEvent(event, fallbackAccountId) {
+  const object = event?.data?.object || {};
+  const metadata = object.metadata || {};
+  const subscriptionMetadata = object.subscription_details?.metadata || {};
+  const merged = { ...subscriptionMetadata, ...metadata };
+  return {
+    accountId: merged.accountId || object.client_reference_id || fallbackAccountId,
+    plan: merged.plan,
+    interval: merged.interval,
+    priceLookupKey: merged.priceLookupKey || merged.lookupKey,
+    status: object.status === 'canceled' ? 'canceled' : (object.status || 'active'),
+    source: 'stripe-webhook',
+    stripeCustomerId: object.customer || object.customer_id || null,
+    stripeSubscriptionId: object.subscription || object.id || null,
+    checkoutSessionId: event.type === 'checkout.session.completed' ? object.id : null,
+    createApiKey: merged.createApiKey !== 'false',
+  };
 }
 
 function publicApiKey(key) {
@@ -816,7 +872,7 @@ const server = http.createServer(async (req, res) => {
   // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-MnemoPay-Account');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-MnemoPay-Account, Stripe-Signature');
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -978,6 +1034,34 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const provisioned = await provisionAccount(body, accountId);
       return json(res, { ok: true, accountId, ...provisioned }, 201);
+    } catch (e) {
+      return errorJson(res, e);
+    }
+  }
+
+  if (pathname === '/api/v1/billing/stripe/webhook' && req.method === 'POST') {
+    try {
+      const rawBody = await readRawBody(req);
+      const signature = req.headers['stripe-signature'];
+      const verification = verifyStripeWebhookSignature(rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET);
+      if (!verification.ok) return json(res, { ok: false, error: verification.reason }, 400);
+      const event = JSON.parse(rawBody || '{}');
+      const handledTypes = new Set(['checkout.session.completed', 'customer.subscription.updated', 'customer.subscription.deleted']);
+      if (!handledTypes.has(event.type)) {
+        return json(res, { ok: true, ignored: true, type: event.type || 'unknown', verification });
+      }
+      const fallbackAccountId = accountIdForRequest(req);
+      const provisionBody = provisioningBodyFromStripeEvent(event, fallbackAccountId);
+      const accountId = String(provisionBody.accountId || fallbackAccountId).slice(0, 120);
+      delete provisionBody.accountId;
+      const provisioned = await provisionAccount(provisionBody, accountId);
+      recordAudit(accountId, 'billing.stripe.webhook.handled', `stripe:${event.id || event.type}`, {
+        eventId: event.id || null,
+        type: event.type,
+        verification: verification.mode,
+      });
+      saveConsoleStore();
+      return json(res, { ok: true, accountId, type: event.type, verification, ...provisioned }, 200);
     } catch (e) {
       return errorJson(res, e);
     }

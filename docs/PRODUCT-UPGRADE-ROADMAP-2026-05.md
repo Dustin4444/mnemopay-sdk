@@ -95,7 +95,11 @@ Checkout success should:
 - The endpoint accepts `plan`, `interval`, or canonical lookup keys such as `mnemopay_pro_monthly`, `mnemopay_team_yearly`, `praetor_pro_monthly`, and `praetor_team_yearly`.
 - Provisioning now persists account plan state, seeds the default hosted brain namespace with a system onboarding memory, creates a first API key when requested, and records `billing.account.provisioned`.
 - Dashboard Billing tab now has operator controls to provision Free, Pro, Team, or Enterprise accounts and reveal the first API key secret once.
-- This is still a server-side provisioning primitive, not the final Stripe webhook. The next step is to call this endpoint from the live checkout success/webhook handler and attach real user auth.
+- Added `POST /api/v1/billing/stripe/webhook` for Stripe-compatible checkout/subscription events.
+- Webhook verification uses `STRIPE_WEBHOOK_SECRET` and Stripe's `t=...,v1=...` HMAC scheme. Without the secret, local dev accepts unsigned events and marks them `unsigned-dev`.
+- Handled events: `checkout.session.completed`, `customer.subscription.updated`, and `customer.subscription.deleted`.
+- Stripe metadata should include `accountId` and either `priceLookupKey` or `plan`/`interval`. The handler calls the same provisioner and records `billing.stripe.webhook.handled`.
+- Next step: deploy behind HTTPS, set the Stripe endpoint URL, and attach real user auth.
 
 Usage metering:
 

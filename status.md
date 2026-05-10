@@ -1,4 +1,19 @@
-﻿# mnemopay-sdk status - 2026-05-10 02:22 Codex
+﻿# mnemopay-sdk status - 2026-05-10 02:44 Codex
+
+## Stripe webhook provisioning intake added
+
+- Continued after usage metering gates.
+- Added raw body reader and Stripe-style webhook signature verification in `dashboard/server.js`.
+- Added `POST /api/v1/billing/stripe/webhook`.
+- Supports `checkout.session.completed`, `customer.subscription.updated`, and `customer.subscription.deleted`.
+- Uses `STRIPE_WEBHOOK_SECRET` with Stripe `t=...,v1=...` HMAC verification. Local dev without the secret is accepted as `unsigned-dev`.
+- Webhook metadata should include `accountId` and either `priceLookupKey` or `plan`/`interval`. Handler maps lookup keys, calls the shared `provisionAccount` flow, and records `billing.stripe.webhook.handled`.
+- CORS allow-list now includes `Stripe-Signature`.
+- Validation passed: `node --check dashboard/server.js`; signed Stripe webhook smoke with `mnemopay_pro_monthly` verified signature, provisioned Pro, created API key metadata, updated overview, and wrote webhook audit event.
+- Next: deploy this console/API behind HTTPS, configure Stripe webhook endpoint, then add auth/session-backed accounts.
+
+---
+# mnemopay-sdk status - 2026-05-10 02:22 Codex
 
 ## Usage metering exports and plan gates added
 
