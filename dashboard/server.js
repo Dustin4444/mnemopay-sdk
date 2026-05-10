@@ -590,6 +590,66 @@ function provisioningBodyFromStripeEvent(event, fallbackAccountId) {
   };
 }
 
+function requestBaseUrl(req) {
+  return String(process.env.MNEMOPAY_PUBLIC_URL || req.headers.origin || `http://localhost:${PORT}`).replace(/\/$/, '');
+}
+
+function lookupKeyForPlan(plan, interval) {
+  const cleanPlan = String(plan || '').toLowerCase();
+  const cleanInterval = String(interval || 'monthly').toLowerCase();
+  if (!['pro', 'team'].includes(cleanPlan)) throw new Error('live checkout is available for pro and team plans');
+  if (!['monthly', 'yearly'].includes(cleanInterval)) throw new Error('live checkout interval must be monthly or yearly');
+  return `mnemopay_${cleanPlan}_${cleanInterval}`;
+}
+
+function stripeBillingClient() {
+  const { createStripeBillingClient } = require('./stripe-billing.cjs');
+  return createStripeBillingClient({ secretKey: process.env.STRIPE_SECRET_KEY });
+}
+
+async function createBillingCheckoutSession(req, body, accountId) {
+  const lookupKey = body.priceLookupKey ? String(body.priceLookupKey).slice(0, 120) : lookupKeyForPlan(body.plan, body.interval);
+  const mapped = PRICE_LOOKUP_TO_PLAN[lookupKey];
+  if (!mapped) throw new Error(`unsupported priceLookupKey: ${lookupKey}`);
+  const baseUrl = requestBaseUrl(req);
+  const successUrl = String(body.successUrl || `${baseUrl}/?checkout=success&session_id={CHECKOUT_SESSION_ID}`).slice(0, 500);
+  const cancelUrl = String(body.cancelUrl || `${baseUrl}/?checkout=cancel`).slice(0, 500);
+  const billing = accountPlanFor(accountId);
+  const session = await stripeBillingClient().createCheckoutSession({
+    accountId,
+    priceLookupKey: lookupKey,
+    priceId: body.priceId ? String(body.priceId).slice(0, 180) : null,
+    plan: mapped.plan,
+    interval: mapped.interval,
+    successUrl,
+    cancelUrl,
+    customer: billing.stripeCustomerId || body.stripeCustomerId || null,
+    customerEmail: body.customerEmail || null,
+  });
+  recordAudit(accountId, 'billing.stripe.checkout.created', `stripe:${session.id || 'checkout'}`, {
+    sessionId: session.id || null,
+    priceLookupKey: lookupKey,
+    plan: mapped.plan,
+    interval: mapped.interval,
+  });
+  saveConsoleStore();
+  return { session, priceLookupKey: lookupKey, plan: mapped.plan, interval: mapped.interval };
+}
+
+async function createBillingPortalSession(req, body, accountId) {
+  const billing = accountPlanFor(accountId);
+  const customer = body.customerId || body.stripeCustomerId || billing.stripeCustomerId;
+  const baseUrl = requestBaseUrl(req);
+  const returnUrl = String(body.returnUrl || `${baseUrl}/?billing=portal`).slice(0, 500);
+  const session = await stripeBillingClient().createPortalSession({ customer, returnUrl });
+  recordAudit(accountId, 'billing.stripe.portal.created', `stripe:${session.id || 'portal'}`, {
+    sessionId: session.id || null,
+    customer,
+  });
+  saveConsoleStore();
+  return { session, customer };
+}
+
 function publicApiKey(key) {
   return {
     id: key.id,
@@ -1707,6 +1767,42 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/v1/billing/onboarding' && req.method === 'GET') {
     const accountId = accountIdForRequest(req);
     return json(res, { ok: true, ...onboardingState(accountId), usage: usageForAccount(accountId) });
+  }
+
+  if (pathname === '/api/v1/billing/checkout/session' && req.method === 'POST') {
+    try {
+      const accountId = accountIdForRequest(req);
+      const body = await readBody(req);
+      const created = await createBillingCheckoutSession(req, body, accountId);
+      return json(res, {
+        ok: true,
+        accountId,
+        sessionId: created.session.id,
+        url: created.session.url,
+        tier: created.plan,
+        interval: created.interval,
+        priceLookupKey: created.priceLookupKey,
+      }, 201);
+    } catch (e) {
+      return errorJson(res, e);
+    }
+  }
+
+  if (pathname === '/api/v1/billing/portal/session' && req.method === 'POST') {
+    try {
+      const accountId = accountIdForRequest(req);
+      const body = await readBody(req);
+      const created = await createBillingPortalSession(req, body, accountId);
+      return json(res, {
+        ok: true,
+        accountId,
+        customer: created.customer,
+        sessionId: created.session.id,
+        url: created.session.url,
+      }, 201);
+    } catch (e) {
+      return errorJson(res, e);
+    }
   }
 
   if ((pathname === '/api/v1/billing/provision' || pathname === '/api/v1/billing/checkout/success') && req.method === 'POST') {

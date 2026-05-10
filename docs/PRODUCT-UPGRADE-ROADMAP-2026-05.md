@@ -120,6 +120,9 @@ Checkout success should:
 - Webhook verification uses `STRIPE_WEBHOOK_SECRET` and Stripe's `t=...,v1=...` HMAC scheme. Without the secret, local dev accepts unsigned events and marks them `unsigned-dev`.
 - Handled events: `checkout.session.completed`, `customer.subscription.updated`, and `customer.subscription.deleted`.
 - Stripe metadata should include `accountId` and either `priceLookupKey` or `plan`/`interval`. The handler calls the same provisioner and records `billing.stripe.webhook.handled`.
+- Added live Stripe session endpoints: `POST /api/v1/billing/checkout/session` and `POST /api/v1/billing/portal/session`.
+- Checkout uses canonical lookup keys such as `mnemopay_pro_monthly`, resolves them through env price IDs or Stripe Price lookup keys, and returns a Stripe Checkout URL.
+- The customer portal endpoint opens Stripe Billing Portal for accounts with a known Stripe customer id.
 - Next step: deploy behind HTTPS, set the Stripe endpoint URL, and attach real user auth.
 
 Usage metering:

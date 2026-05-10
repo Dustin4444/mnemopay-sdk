@@ -1,4 +1,16 @@
-﻿# mnemopay-sdk status - 2026-05-10 14:04 Codex
+﻿# mnemopay-sdk status - 2026-05-10 14:35 Codex
+
+## Live Stripe checkout and portal sessions added
+
+- Added `dashboard/stripe-billing.cjs`, a small Stripe REST helper for Checkout Sessions and Billing Portal Sessions using form-encoded Stripe API calls.
+- Added `dashboard/stripe-billing.test.cjs` with mocked Stripe request coverage for form encoding, price lookup resolution, checkout session creation, and portal session creation.
+- Added `POST /api/v1/billing/checkout/session` for Pro/Team monthly/yearly live checkout.
+- Added `POST /api/v1/billing/portal/session` for the Stripe customer portal when the account has a Stripe customer id.
+- Dashboard Billing panel now has Stripe Checkout and Customer Portal buttons.
+- Checkout resolves canonical lookup keys through env vars (`STRIPE_PRICE_MNEMOPAY_PRO_MONTHLY`, etc.) or Stripe Price lookup keys, and webhook provisioning remains the source of truth after payment.
+
+---
+# mnemopay-sdk status - 2026-05-10 14:04 Codex
 
 ## Postgres console-store wired behind env flag
 
