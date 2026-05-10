@@ -89,6 +89,14 @@ Checkout success should:
 6. Fire Pixel/GTM purchase event.
 7. Record audit event.
 
+2026-05-10 provisioning progress:
+
+- Added `POST /api/v1/billing/provision` and alias `POST /api/v1/billing/checkout/success`.
+- The endpoint accepts `plan`, `interval`, or canonical lookup keys such as `mnemopay_pro_monthly`, `mnemopay_team_yearly`, `praetor_pro_monthly`, and `praetor_team_yearly`.
+- Provisioning now persists account plan state, seeds the default hosted brain namespace with a system onboarding memory, creates a first API key when requested, and records `billing.account.provisioned`.
+- Dashboard Billing tab now has operator controls to provision Free, Pro, Team, or Enterprise accounts and reveal the first API key secret once.
+- This is still a server-side provisioning primitive, not the final Stripe webhook. The next step is to call this endpoint from the live checkout success/webhook handler and attach real user auth.
+
 Usage metering:
 
 - Brain writes.

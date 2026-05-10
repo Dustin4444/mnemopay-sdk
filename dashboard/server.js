@@ -25,6 +25,7 @@ let brain;
 const brainMemories = new Map();
 const apiKeys = new Map();
 const usageCounters = new Map();
+const accountPlans = new Map();
 const auditEvents = [];
 try {
   const SDK = require('../dist/index.js');
@@ -218,9 +219,85 @@ function blankUsage() {
   return { brainWrites: 0, brainQueries: 0, railCharges: 0, railSettlements: 0 };
 }
 
+const PLAN_CATALOG = {
+  free: {
+    plan: 'free',
+    name: 'Free',
+    monthlyCents: 0,
+    missions: 5,
+    llmCapCents: 100,
+    seats: 1,
+    features: ['public charters', 'hosted brain dev mode'],
+  },
+  pro: {
+    plan: 'pro',
+    name: 'Pro',
+    monthlyCents: 2900,
+    yearlyCents: 29000,
+    missions: 100,
+    llmCapCents: 2500,
+    seats: 1,
+    features: ['private charters', 'EU AI Act audit bundles', 'hosted brain namespaces'],
+  },
+  team: {
+    plan: 'team',
+    name: 'Team',
+    monthlyCents: 9900,
+    yearlyCents: 99000,
+    missions: 'unlimited',
+    llmCapCents: 10000,
+    seats: 5,
+    features: ['marketplace publish', 'team audit feed', 'BYOK above cap'],
+  },
+  enterprise: {
+    plan: 'enterprise',
+    name: 'Enterprise',
+    monthlyCents: null,
+    missions: 'custom',
+    llmCapCents: null,
+    seats: 'custom',
+    features: ['SLA', 'on-prem', 'KYA governance', '7y audit retention'],
+  },
+};
+
+const PRICE_LOOKUP_TO_PLAN = {
+  mnemopay_pro_monthly: { plan: 'pro', interval: 'monthly' },
+  mnemopay_pro_yearly: { plan: 'pro', interval: 'yearly' },
+  mnemopay_team_monthly: { plan: 'team', interval: 'monthly' },
+  mnemopay_team_yearly: { plan: 'team', interval: 'yearly' },
+  praetor_pro_monthly: { plan: 'pro', interval: 'monthly' },
+  praetor_pro_yearly: { plan: 'pro', interval: 'yearly' },
+  praetor_team_monthly: { plan: 'team', interval: 'monthly' },
+  praetor_team_yearly: { plan: 'team', interval: 'yearly' },
+};
+
 function usageForAccount(accountId) {
   if (!usageCounters.has(accountId)) usageCounters.set(accountId, blankUsage());
   return usageCounters.get(accountId);
+}
+
+function defaultAccountPlan(accountId) {
+  const plan = PLAN_CATALOG[DEFAULT_PLAN] ? DEFAULT_PLAN : 'free';
+  return {
+    accountId,
+    plan,
+    interval: 'monthly',
+    status: 'active',
+    source: 'default',
+    priceLookupKey: null,
+    stripeCustomerId: null,
+    stripeSubscriptionId: null,
+    checkoutSessionId: null,
+    provisionedAt: null,
+    updatedAt: null,
+    limits: PLAN_CATALOG[plan],
+  };
+}
+
+function accountPlanFor(accountId) {
+  const current = accountPlans.get(accountId);
+  if (current) return { ...current, limits: PLAN_CATALOG[current.plan] || PLAN_CATALOG.free };
+  return defaultAccountPlan(accountId);
 }
 
 function publicApiKey(key) {
@@ -329,6 +406,21 @@ function openConsoleSqlite() {
       rail_settlements INTEGER NOT NULL DEFAULT 0,
       payload TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS console_account_plans (
+      account_id TEXT PRIMARY KEY,
+      plan TEXT NOT NULL,
+      interval TEXT NOT NULL,
+      status TEXT NOT NULL,
+      source TEXT NOT NULL,
+      price_lookup_key TEXT,
+      stripe_customer_id TEXT,
+      stripe_subscription_id TEXT,
+      checkout_session_id TEXT,
+      provisioned_at TEXT,
+      updated_at TEXT,
+      payload TEXT NOT NULL
+    );
   `);
   consoleSqlite = db;
   return consoleSqlite;
@@ -351,6 +443,9 @@ function loadConsoleStoreFromSqlite() {
     const counters = JSON.parse(row.payload);
     usageCounters.set(row.account_id, { ...blankUsage(), ...counters });
   }
+  for (const row of db.prepare('SELECT account_id, payload FROM console_account_plans').all()) {
+    accountPlans.set(row.account_id, JSON.parse(row.payload));
+  }
   console.log(`[console-store] loaded ${apiKeys.size} keys, ${brainMemories.size} brain memories, ${auditEvents.length} audit events from sqlite ${CONSOLE_SQLITE_PATH}`);
 }
 
@@ -364,6 +459,7 @@ function saveConsoleStoreToSqlite() {
     db.prepare('DELETE FROM console_brain_memories').run();
     db.prepare('DELETE FROM console_audit_events').run();
     db.prepare('DELETE FROM console_usage_counters').run();
+    db.prepare('DELETE FROM console_account_plans').run();
 
     const insertKey = db.prepare(`INSERT INTO console_api_keys
       (id, account_id, name, prefix, key_hash, created_at, last_used_at, revoked_at, payload)
@@ -412,6 +508,22 @@ function saveConsoleStoreToSqlite() {
         payload: JSON.stringify(counters),
       });
     }
+
+    const insertPlan = db.prepare(`INSERT INTO console_account_plans
+      (account_id, plan, interval, status, source, price_lookup_key, stripe_customer_id, stripe_subscription_id, checkout_session_id, provisioned_at, updated_at, payload)
+      VALUES (@accountId, @plan, @interval, @status, @source, @priceLookupKey, @stripeCustomerId, @stripeSubscriptionId, @checkoutSessionId, @provisionedAt, @updatedAt, @payload)`);
+    for (const plan of accountPlans.values()) {
+      insertPlan.run({
+        ...plan,
+        priceLookupKey: plan.priceLookupKey || null,
+        stripeCustomerId: plan.stripeCustomerId || null,
+        stripeSubscriptionId: plan.stripeSubscriptionId || null,
+        checkoutSessionId: plan.checkoutSessionId || null,
+        provisionedAt: plan.provisionedAt || null,
+        updatedAt: plan.updatedAt || null,
+        payload: JSON.stringify(plan),
+      });
+    }
   });
 
   write();
@@ -432,6 +544,7 @@ function loadConsoleStore() {
     for (const [accountId, usage] of Object.entries(data.usageCounters || {})) {
       usageCounters.set(accountId, { ...blankUsage(), ...usage });
     }
+    for (const row of data.accountPlans || []) accountPlans.set(row.accountId, row);
     console.log(`[console-store] loaded ${apiKeys.size} keys, ${brainMemories.size} brain memories, ${auditEvents.length} audit events from ${CONSOLE_STORE_PATH}`);
   } catch (e) {
     console.warn(`[console-store] failed to load ${CONSOLE_STORE_PATH}: ${e.message}`);
@@ -454,6 +567,7 @@ function saveConsoleStore() {
       brainMemories: Array.from(brainMemories.values()),
       auditEvents,
       usageCounters: usage,
+      accountPlans: Array.from(accountPlans.values()),
     }, null, 2));
   } catch (e) {
     console.warn(`[console-store] failed to save ${CONSOLE_STORE_PATH}: ${e.message}`);
@@ -489,6 +603,70 @@ async function storeBrainMemory(body, accountId) {
   }
   saveConsoleStore();
   return publicBrainMemory(memory);
+}
+
+async function provisionAccount(body, accountId) {
+  const lookup = body.priceLookupKey ? PRICE_LOOKUP_TO_PLAN[String(body.priceLookupKey)] : null;
+  const plan = lookup?.plan || String(body.plan || DEFAULT_PLAN || 'free').toLowerCase();
+  if (!PLAN_CATALOG[plan]) throw new Error(`unsupported plan: ${plan}`);
+  const interval = lookup?.interval || String(body.interval || 'monthly').toLowerCase();
+  if (!['monthly', 'yearly', 'custom'].includes(interval)) throw new Error(`unsupported interval: ${interval}`);
+
+  const now = new Date().toISOString();
+  const existing = accountPlans.get(accountId) || {};
+  const accountPlan = {
+    accountId,
+    plan,
+    interval,
+    status: String(body.status || 'active').slice(0, 40),
+    source: String(body.source || (body.checkoutSessionId ? 'checkout' : 'manual')).slice(0, 40),
+    priceLookupKey: body.priceLookupKey ? String(body.priceLookupKey).slice(0, 120) : null,
+    stripeCustomerId: body.stripeCustomerId ? String(body.stripeCustomerId).slice(0, 160) : null,
+    stripeSubscriptionId: body.stripeSubscriptionId ? String(body.stripeSubscriptionId).slice(0, 160) : null,
+    checkoutSessionId: body.checkoutSessionId ? String(body.checkoutSessionId).slice(0, 180) : null,
+    provisionedAt: existing.provisionedAt || now,
+    updatedAt: now,
+  };
+  accountPlans.set(accountId, accountPlan);
+
+  const namespace = String(body.namespace || 'default').slice(0, 120);
+  const hasNamespaceMemory = Array.from(brainMemories.values())
+    .some((m) => m.accountId === accountId && m.namespace === namespace && (m.tags || []).includes('provisioning'));
+  let starterMemory = null;
+  if (!hasNamespaceMemory) {
+    starterMemory = await storeBrainMemory({
+      id: `mem_provision_${crypto.createHash('sha1').update(`${accountId}:${namespace}`).digest('hex').slice(0, 24)}`,
+      namespace,
+      content: `Account ${accountId} provisioned on MnemoPay ${PLAN_CATALOG[plan].name} (${interval}). Use this namespace as the default hosted brain for onboarding and first agent memory.`,
+      tags: ['provisioning', 'system'],
+      importance: 0.85,
+    }, accountId);
+  }
+
+  let apiKey = null;
+  const shouldCreateKey = body.createApiKey !== false;
+  const hasActiveKey = Array.from(apiKeys.values()).some((key) => key.accountId === accountId && !key.revokedAt);
+  if (shouldCreateKey && !hasActiveKey) {
+    apiKey = createApiKey(accountId, body.apiKeyName || `${plan}-default`);
+  }
+
+  recordAudit(accountId, 'billing.account.provisioned', `account:${accountId}`, {
+    plan,
+    interval,
+    source: accountPlan.source,
+    priceLookupKey: accountPlan.priceLookupKey,
+    checkoutSessionId: accountPlan.checkoutSessionId,
+    starterMemoryId: starterMemory?.id || null,
+    apiKeyId: apiKey?.id || null,
+  });
+  saveConsoleStore();
+
+  return {
+    account: accountPlanFor(accountId),
+    starterMemory,
+    apiKey: apiKey ? { ...publicApiKey(apiKey), secret: apiKey.secret } : null,
+    onboarding: onboardingState(accountId),
+  };
 }
 
 async function queryBrain(body, accountId) {
@@ -548,9 +726,11 @@ function createApiKey(accountId, name = 'default') {
 
 function onboardingState(accountId) {
   const usage = usageForAccount(accountId);
+  const billing = accountPlanFor(accountId);
   const hasKey = Array.from(apiKeys.values()).some((k) => k.accountId === accountId && !k.revokedAt);
   const hasBrainMemory = Array.from(brainMemories.values()).some((m) => m.accountId === accountId);
   const profileTasks = [
+    { id: 'provision-account', label: 'Provision account plan', done: !!billing.provisionedAt || billing.source !== 'default' },
     { id: 'create-api-key', label: 'Create first API key', done: hasKey },
     { id: 'write-brain-memory', label: 'Write first hosted brain memory', done: hasBrainMemory },
     { id: 'run-brain-query', label: 'Run first hosted recall query', done: usage.brainQueries > 0 },
@@ -559,7 +739,8 @@ function onboardingState(accountId) {
   ];
   return {
     accountId,
-    plan: DEFAULT_PLAN,
+    plan: billing.plan,
+    billing,
     complete: profileTasks.every((task) => task.done),
     tasks: profileTasks,
   };
@@ -670,13 +851,15 @@ const server = http.createServer(async (req, res) => {
     const accountId = accountIdForRequest(req);
     const profile = await agent.profile();
     const balance = await agent.balance();
+    const billing = accountPlanFor(accountId);
     const accountKeys = Array.from(apiKeys.values()).filter((key) => key.accountId === accountId);
     const accountMemories = Array.from(brainMemories.values()).filter((memory) => memory.accountId === accountId);
     return json(res, {
       ok: true,
       accountId,
       positioning: 'brain, wallet, and audit trail for AI agents',
-      plan: DEFAULT_PLAN,
+      plan: billing.plan,
+      billing,
       profile,
       balance,
       usage: usageForAccount(accountId),
@@ -720,6 +903,17 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/v1/billing/onboarding' && req.method === 'GET') {
     const accountId = accountIdForRequest(req);
     return json(res, { ok: true, ...onboardingState(accountId), usage: usageForAccount(accountId) });
+  }
+
+  if ((pathname === '/api/v1/billing/provision' || pathname === '/api/v1/billing/checkout/success') && req.method === 'POST') {
+    try {
+      const accountId = accountIdForRequest(req);
+      const body = await readBody(req);
+      const provisioned = await provisionAccount(body, accountId);
+      return json(res, { ok: true, accountId, ...provisioned }, 201);
+    } catch (e) {
+      return json(res, { ok: false, error: e.message }, 400);
+    }
   }
 
   if (pathname === '/api/v1/audit/events' && req.method === 'GET') {

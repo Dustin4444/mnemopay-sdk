@@ -549,12 +549,60 @@ function BrainPanel({ onRefresh }) {
 
 function BillingPanel({ overview, onRefresh }) {
   const tasks = overview?.onboarding?.tasks || [];
+  const billing = overview?.billing || overview?.onboarding?.billing || {};
+  const [plan, setPlan] = useState(billing.plan || overview?.plan || 'pro');
+  const [interval, setInterval] = useState(billing.interval || 'monthly');
+  const [provisionedSecret, setProvisionedSecret] = useState('');
+  const [status, setStatus] = useState('');
+
+  useEffect(() => {
+    setPlan(billing.plan || overview?.plan || 'pro');
+    setInterval(billing.interval || 'monthly');
+  }, [billing.plan, billing.interval, overview?.plan]);
+
+  const provision = async () => {
+    const payload = await api.post('/api/v1/billing/provision', {
+      plan,
+      interval,
+      source: 'dashboard',
+      createApiKey: true,
+      apiKeyName: `${plan}-default`,
+    });
+    setProvisionedSecret(payload.apiKey?.secret || '');
+    setStatus(`Provisioned ${payload.account?.plan || plan} for ${payload.accountId}.`);
+    onRefresh();
+  };
+
   return (
     <div className="space-y-4 fade-in">
       <div className="glass rounded-xl p-5">
         <p className="text-xs uppercase tracking-wider text-teal mb-2">Billing and Provisioning</p>
         <h2 className="text-2xl font-bold text-white">{(overview?.plan || 'free').toUpperCase()} plan</h2>
-        <p className="text-sm text-gray-400 mt-2">Provisioning state is derived from real console actions: API keys, brain writes, recall queries, rail holds, and audit export.</p>
+        <p className="text-sm text-gray-400 mt-2">Provisioning now creates real account state: plan, default hosted brain namespace, first API key, usage counters, and audit event.</p>
+        <div className="grid md:grid-cols-4 gap-3 mt-4">
+          <select value={plan} onChange={e => setPlan(e.target.value)}
+            className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none">
+            <option value="free">Free</option>
+            <option value="pro">Pro</option>
+            <option value="team">Team</option>
+            <option value="enterprise">Enterprise</option>
+          </select>
+          <select value={interval} onChange={e => setInterval(e.target.value)}
+            className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none">
+            <option value="monthly">Monthly</option>
+            <option value="yearly">Yearly</option>
+            <option value="custom">Custom</option>
+          </select>
+          <button onClick={provision} className="px-4 py-2 bg-teal text-white rounded-lg text-sm font-medium hover:bg-teal-600 transition">Provision Account</button>
+          <button onClick={onRefresh} className="px-4 py-2 bg-white/5 border border-white/10 text-gray-300 rounded-lg text-sm">Refresh</button>
+        </div>
+        {status && <p className="text-xs text-gray-500 mt-3">{sanitize(status)}</p>}
+        {provisionedSecret && (
+          <div className="mt-3 rounded-lg border border-amber-400/25 bg-amber-400/10 p-3">
+            <p className="text-xs text-amber-300 mb-2">First API key created. Save this secret now.</p>
+            <code className="text-xs text-white break-all">{provisionedSecret}</code>
+          </div>
+        )}
       </div>
       <div className="grid md:grid-cols-5 gap-3">
         {tasks.map(task => (

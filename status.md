@@ -1,4 +1,19 @@
-﻿# mnemopay-sdk status - 2026-05-10 01:30 Codex
+﻿# mnemopay-sdk status - 2026-05-10 01:58 Codex
+
+## Billing provisioning primitive added
+
+- Continued the MnemoPay console/app production build after SQLite persistence.
+- `dashboard/server.js` now tracks persisted account plan state alongside API keys, hosted brain memories, audit events, and usage counters.
+- Added plan catalog for Free, Pro, Team, and Enterprise with mission/LLM/seat limits and feature notes.
+- Added lookup-key mapping for `mnemopay_*` and `praetor_*` Pro/Team monthly/yearly keys so checkout success can provision the correct plan without changing canonical Stripe IDs.
+- Added `POST /api/v1/billing/provision` and alias `POST /api/v1/billing/checkout/success`.
+- Provisioning now sets account plan, seeds the default hosted brain namespace with an onboarding memory, optionally creates the first API key with one-time secret reveal, records `billing.account.provisioned`, and persists across JSON/SQLite stores.
+- Dashboard Billing tab now includes operator controls to provision Free, Pro, Team, or Enterprise and show the first API secret once.
+- Validation passed: `node --check dashboard/server.js`; SQLite provisioning smoke mapped `praetor_team_yearly` to Team yearly, created a key, seeded default namespace memory, wrote audit, and survived restart; JSON provisioning smoke passed for Pro monthly.
+- Next: wire real Stripe checkout/webhook into this provisioner, then add auth/session-backed accounts and usage metering exports.
+
+---
+# mnemopay-sdk status - 2026-05-10 01:30 Codex
 
 ## Optional SQLite console store added
 
