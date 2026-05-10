@@ -30,6 +30,7 @@ const apiKeys = new Map();
 const usageCounters = new Map();
 const accountPlans = new Map();
 const consoleSessions = new Map();
+const accountMembers = new Map();
 const auditEvents = [];
 try {
   const SDK = require('../dist/index.js');
@@ -270,10 +271,87 @@ function publicSession(session) {
     accountId: session.accountId,
     email: session.email || null,
     name: session.name || null,
+    role: session.role || roleForPrincipal(session.accountId, session.email),
     createdAt: session.createdAt,
     expiresAt: session.expiresAt,
     lastSeenAt: session.lastSeenAt || null,
   };
+}
+
+function memberKey(accountId, email) {
+  return `${accountId}:${String(email || '').toLowerCase()}`;
+}
+
+function membersForAccount(accountId) {
+  return Array.from(accountMembers.values())
+    .filter((member) => member.accountId === accountId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+function publicMember(member) {
+  return {
+    id: member.id,
+    accountId: member.accountId,
+    email: member.email,
+    name: member.name || null,
+    role: member.role,
+    createdAt: member.createdAt,
+    updatedAt: member.updatedAt || null,
+  };
+}
+
+function roleForPrincipal(accountId, email) {
+  if (!email) return membersForAccount(accountId).length === 0 ? 'owner' : 'admin';
+  return accountMembers.get(memberKey(accountId, email))?.role || (membersForAccount(accountId).length === 0 ? 'owner' : 'member');
+}
+
+function upsertAccountMember(accountId, { email, name, role = 'member', source = 'manual' }) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail) throw new Error('email required');
+  if (!['owner', 'admin', 'member', 'viewer'].includes(role)) throw new Error(`unsupported role: ${role}`);
+  const now = new Date().toISOString();
+  const id = memberKey(accountId, normalizedEmail);
+  const existing = accountMembers.get(id);
+  const member = {
+    id,
+    accountId,
+    email: normalizedEmail,
+    name: name ? String(name).slice(0, 120) : existing?.name || null,
+    role,
+    source,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+  accountMembers.set(id, member);
+  recordAudit(accountId, existing ? 'auth.member.updated' : 'auth.member.created', `member:${normalizedEmail}`, { email: normalizedEmail, role, source });
+  saveConsoleStore();
+  return member;
+}
+
+function ensureSessionMembership(session) {
+  if (!session.email) {
+    session.role = roleForPrincipal(session.accountId, session.email);
+    return session.role;
+  }
+  let role = roleForPrincipal(session.accountId, session.email);
+  if (!accountMembers.has(memberKey(session.accountId, session.email))) {
+    role = membersForAccount(session.accountId).length === 0 ? 'owner' : 'member';
+    upsertAccountMember(session.accountId, { email: session.email, name: session.name, role, source: 'session-login' });
+  }
+  session.role = role;
+  return role;
+}
+
+function roleRank(role) {
+  return { owner: 4, admin: 3, member: 2, viewer: 1 }[role] || 0;
+}
+
+function assertSessionRole(req, accountId, minimum = 'admin') {
+  const session = sessionForRequest(req);
+  if (!session || session.accountId !== accountId) throw Object.assign(new Error('signed session required'), { status: 401 });
+  ensureSessionMembership(session);
+  if (roleRank(session.role) < roleRank(minimum)) throw Object.assign(new Error('insufficient role'), { status: 403, details: { required: minimum, role: session.role } });
+  return session;
 }
 
 function sessionForRequest(req) {
@@ -387,16 +465,20 @@ function accountPlanFor(accountId) {
 
 function createConsoleSession({ accountId, email, name }) {
   const now = new Date();
+  const normalizedEmail = email ? String(email).trim().toLowerCase().slice(0, 180) : null;
+  const role = roleForPrincipal(String(accountId || DEFAULT_ACCOUNT_ID).slice(0, 120), normalizedEmail);
   const session = {
     id: `sess_${uuid()}`,
     accountId: String(accountId || DEFAULT_ACCOUNT_ID).slice(0, 120),
-    email: email ? String(email).slice(0, 180) : null,
+    email: normalizedEmail,
     name: name ? String(name).slice(0, 120) : null,
+    role,
     createdAt: now.toISOString(),
     lastSeenAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + SESSION_TTL_MS).toISOString(),
   };
   consoleSessions.set(session.id, session);
+  ensureSessionMembership(session);
   recordAudit(session.accountId, 'auth.session.created', `session:${session.id}`, { email: session.email, name: session.name });
   saveConsoleStore();
   return session;
@@ -638,6 +720,19 @@ function openConsoleSqlite() {
       payload TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_console_sessions_account ON console_sessions(account_id);
+
+    CREATE TABLE IF NOT EXISTS console_account_members (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      name TEXT,
+      role TEXT NOT NULL,
+      source TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT,
+      payload TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_console_members_account ON console_account_members(account_id);
   `);
   consoleSqlite = db;
   return consoleSqlite;
@@ -667,6 +762,9 @@ function loadConsoleStoreFromSqlite() {
     const session = JSON.parse(row.payload);
     if (new Date(session.expiresAt).getTime() > Date.now()) consoleSessions.set(row.id, session);
   }
+  for (const row of db.prepare('SELECT id, payload FROM console_account_members').all()) {
+    accountMembers.set(row.id, JSON.parse(row.payload));
+  }
   console.log(`[console-store] loaded ${apiKeys.size} keys, ${brainMemories.size} brain memories, ${auditEvents.length} audit events from sqlite ${CONSOLE_SQLITE_PATH}`);
 }
 
@@ -682,6 +780,7 @@ function saveConsoleStoreToSqlite() {
     db.prepare('DELETE FROM console_usage_counters').run();
     db.prepare('DELETE FROM console_account_plans').run();
     db.prepare('DELETE FROM console_sessions').run();
+    db.prepare('DELETE FROM console_account_members').run();
 
     const insertKey = db.prepare(`INSERT INTO console_api_keys
       (id, account_id, name, prefix, key_hash, created_at, last_used_at, revoked_at, payload)
@@ -760,6 +859,18 @@ function saveConsoleStoreToSqlite() {
         payload: JSON.stringify(session),
       });
     }
+
+    const insertMember = db.prepare(`INSERT INTO console_account_members
+      (id, account_id, email, name, role, source, created_at, updated_at, payload)
+      VALUES (@id, @accountId, @email, @name, @role, @source, @createdAt, @updatedAt, @payload)`);
+    for (const member of accountMembers.values()) {
+      insertMember.run({
+        ...member,
+        name: member.name || null,
+        updatedAt: member.updatedAt || null,
+        payload: JSON.stringify(member),
+      });
+    }
   });
 
   write();
@@ -784,6 +895,7 @@ function loadConsoleStore() {
     for (const row of data.consoleSessions || []) {
       if (new Date(row.expiresAt).getTime() > Date.now()) consoleSessions.set(row.id, row);
     }
+    for (const row of data.accountMembers || []) accountMembers.set(row.id, row);
     console.log(`[console-store] loaded ${apiKeys.size} keys, ${brainMemories.size} brain memories, ${auditEvents.length} audit events from ${CONSOLE_STORE_PATH}`);
   } catch (e) {
     console.warn(`[console-store] failed to load ${CONSOLE_STORE_PATH}: ${e.message}`);
@@ -808,6 +920,7 @@ function saveConsoleStore() {
       usageCounters: usage,
       accountPlans: Array.from(accountPlans.values()),
       consoleSessions: Array.from(consoleSessions.values()).filter((session) => new Date(session.expiresAt).getTime() > Date.now()),
+      accountMembers: Array.from(accountMembers.values()),
     }, null, 2));
   } catch (e) {
     console.warn(`[console-store] failed to save ${CONSOLE_STORE_PATH}: ${e.message}`);
@@ -1011,6 +1124,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/v1/auth/session' && req.method === 'GET') {
     const session = sessionForRequest(req);
+    if (session) ensureSessionMembership(session);
     return json(res, { ok: true, authenticated: !!session, session: publicSession(session) });
   }
 
@@ -1036,6 +1150,23 @@ const server = http.createServer(async (req, res) => {
     }
     clearSessionCookie(res);
     return json(res, { ok: true });
+  }
+
+  if (pathname === '/api/v1/auth/members' && req.method === 'GET') {
+    const accountId = accountIdForRequest(req);
+    return json(res, { ok: true, accountId, members: membersForAccount(accountId).map(publicMember) });
+  }
+
+  if (pathname === '/api/v1/auth/members' && req.method === 'POST') {
+    try {
+      const accountId = accountIdForRequest(req);
+      assertSessionRole(req, accountId, 'admin');
+      const body = await readBody(req);
+      const member = upsertAccountMember(accountId, body);
+      return json(res, { ok: true, accountId, member: publicMember(member) }, 201);
+    } catch (e) {
+      return errorJson(res, e);
+    }
   }
 
   // Memories
@@ -1145,6 +1276,7 @@ const server = http.createServer(async (req, res) => {
       usage: usageForAccount(accountId),
       metering: meteringSnapshot(accountId),
       onboarding: onboardingState(accountId),
+      members: membersForAccount(accountId).map(publicMember),
       apiKeys: accountKeys.map(publicApiKey),
       brain: {
         mode: brain ? 'recall-engine' : 'fallback',

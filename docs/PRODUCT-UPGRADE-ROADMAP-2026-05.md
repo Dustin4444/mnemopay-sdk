@@ -75,6 +75,8 @@ Production requirements:
 - Session cookies are HMAC-signed with `MNEMOPAY_SESSION_SECRET` or `MNEMOPAY_SECRET`, HttpOnly, SameSite=Lax, and persisted in JSON/SQLite stores until expiry.
 - Account resolution order is now Bearer API key, signed browser session, then `X-MnemoPay-Account` dev fallback.
 - Dashboard now has a Session tab for signing into/switching an account, plus visible session state in the Console panel.
+- Added lightweight account members: first signed email becomes owner, owners/admins can add admin/member/viewer records through `GET/POST /api/v1/auth/members`.
+- Dashboard Session tab now shows account members and can add a member while signed in.
 - This is still lightweight console auth. The hosted product still needs a real identity provider and user/account membership model.
 
 2026-05-10 persistence progress:

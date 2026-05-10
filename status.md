@@ -1,4 +1,18 @@
-﻿# mnemopay-sdk status - 2026-05-10 09:02 Codex
+﻿# mnemopay-sdk status - 2026-05-10 09:22 Codex
+
+## Lightweight account membership added
+
+- Continued immediately after signed console sessions.
+- `dashboard/server.js` now stores account members in JSON/SQLite alongside sessions.
+- First signed email for an account becomes `owner`; owners/admins can add account members through `POST /api/v1/auth/members`.
+- Added `GET /api/v1/auth/members` and member records with roles: owner, admin, member, viewer.
+- Public session payload now includes role, and overview includes account members.
+- Dashboard Session tab now shows Account Members and can add admin/member/viewer while signed in.
+- Validation passed: `node --check dashboard/server.js`; SQLite membership smoke verified first user becomes owner, owner adds viewer member, member list returns it, and overview includes members.
+- Next: real hosted identity provider/user membership model can replace this shim; Python hosted client parity remains the next SDK-facing build.
+
+---
+# mnemopay-sdk status - 2026-05-10 09:02 Codex
 
 ## Signed console sessions added
 

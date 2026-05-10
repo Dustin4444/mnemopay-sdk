@@ -686,9 +686,11 @@ function ControlAuditPanel({ events }) {
   );
 }
 
-function SessionPanel({ session, accountId, onLogin, onLogout }) {
+function SessionPanel({ session, accountId, members = [], onLogin, onLogout, onRefresh }) {
   const [nextAccount, setNextAccount] = useState(accountId || 'default');
   const [email, setEmail] = useState('');
+  const [memberEmail, setMemberEmail] = useState('');
+  const [memberRole, setMemberRole] = useState('member');
 
   useEffect(() => {
     setNextAccount(accountId || 'default');
@@ -696,6 +698,13 @@ function SessionPanel({ session, accountId, onLogin, onLogout }) {
 
   const submit = async () => {
     await onLogin(nextAccount, email);
+  };
+
+  const addMember = async () => {
+    if (!memberEmail.trim()) return;
+    await api.post('/api/v1/auth/members', { email: memberEmail, role: memberRole, source: 'dashboard' });
+    setMemberEmail('');
+    onRefresh();
   };
 
   return (
@@ -733,6 +742,36 @@ function SessionPanel({ session, accountId, onLogin, onLogout }) {
           </div>
         </div>
       )}
+      <div className="mt-5 border-t border-white/10 pt-4">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <h4 className="text-sm font-semibold text-gray-300">Account Members</h4>
+          <span className="text-xs text-gray-500">{members.length} total</span>
+        </div>
+        <div className="grid md:grid-cols-3 gap-3 mb-3">
+          <input className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none"
+            value={memberEmail} onChange={e => setMemberEmail(e.target.value)} placeholder="member email" />
+          <select value={memberRole} onChange={e => setMemberRole(e.target.value)}
+            className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none">
+            <option value="admin">Admin</option>
+            <option value="member">Member</option>
+            <option value="viewer">Viewer</option>
+          </select>
+          <button onClick={addMember} disabled={!session?.authenticated}
+            className="px-4 py-2 bg-white/5 border border-white/10 text-gray-300 rounded-lg text-sm disabled:opacity-40">Add Member</button>
+        </div>
+        <div className="rounded-xl border border-white/10 overflow-hidden">
+          {members.map(member => (
+            <div key={member.id} className="px-4 py-3 border-b border-white/5 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm text-white">{sanitize(member.email)}</div>
+                <div className="text-xs text-gray-500">{member.createdAt ? new Date(member.createdAt).toLocaleString() : ''}</div>
+              </div>
+              <span className="status-badge status-pr-open">{sanitize(member.role)}</span>
+            </div>
+          ))}
+          {members.length === 0 && <div className="px-4 py-6 text-sm text-gray-500 text-center">No members yet.</div>}
+        </div>
+      </div>
     </div>
   );
 }
@@ -994,7 +1033,7 @@ function Dashboard() {
 
       {/* Tab Content */}
       {tab === 'console' && <ConsolePanel overview={overview} accountId={accountId} onAccountChange={handleAccountChange} onRefresh={fetchAll} />}
-      {tab === 'session' && <SessionPanel session={session} accountId={accountId} onLogin={loginSession} onLogout={logoutSession} />}
+      {tab === 'session' && <SessionPanel session={session} accountId={accountId} members={overview?.members || []} onLogin={loginSession} onLogout={logoutSession} onRefresh={fetchAll} />}
       {tab === 'brain' && <BrainPanel onRefresh={fetchAll} />}
       {tab === 'developer' && <DeveloperPanel apiKeys={overview?.apiKeys || []} onRefresh={fetchAll} />}
       {tab === 'billing' && <BillingPanel overview={overview} onRefresh={fetchAll} />}
