@@ -1,4 +1,15 @@
-﻿# mnemopay-sdk status - 2026-05-10 15:23 Codex
+﻿# mnemopay-sdk status - 2026-05-10 15:47 Codex
+
+## Dashboard deployment readiness added
+
+- Fixed `dashboard/Dockerfile` so deployed containers copy the full dashboard folder, including Postgres, Stripe, and auth email helper modules.
+- Added `dashboard/package.json` with runtime `pg` dependency and dashboard test script.
+- Updated `dashboard/fly.toml` with `/readyz` health checks and production env defaults for `MNEMOPAY_CONSOLE_STORE_DRIVER=postgres` and `NODE_ENV=production`.
+- Added server readiness reporting via `/readyz`, `/healthz`, and `/api/v1/ops/readiness`.
+- Readiness checks report required/recommended config for session secret, Postgres URL, Stripe secret, Stripe webhook secret, Resend key, auth email sender, and public URL.
+
+---
+# mnemopay-sdk status - 2026-05-10 15:23 Codex
 
 ## Auth code email delivery added
 

@@ -1,0 +1,14 @@
+{
+  "name": "mnemopay-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Hosted MnemoPay console/dashboard",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node auth-email.test.cjs && node console-postgres-store.test.cjs && node stripe-billing.test.cjs"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}

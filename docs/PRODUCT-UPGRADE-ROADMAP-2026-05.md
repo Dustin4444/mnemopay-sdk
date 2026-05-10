@@ -186,6 +186,8 @@ Python should not try to mirror every internal TypeScript primitive first. It sh
 - Added mock-pool coverage in `dashboard/console-postgres-store.test.cjs`.
 - Wired the live dashboard to `MNEMOPAY_CONSOLE_STORE_DRIVER=postgres` with `MNEMOPAY_CONSOLE_POSTGRES_URL`, `NEON_URL`, or `DATABASE_URL`.
 - JSON and SQLite remain the defaults for local/dev use. Postgres saves are serialized asynchronously after mutations.
+- Updated the dashboard Docker/Fly packaging so deployed containers include helper modules and install `pg`.
+- Added `/readyz` and `/api/v1/ops/readiness` to report production env readiness for Postgres, Stripe, Resend, public URL, and session secrets.
 
 ## SOC 2/compliance path
 

@@ -231,6 +231,31 @@ function errorJson(res, e, fallbackStatus = 400) {
   return json(res, { ok: false, error: e.message, details: e.details || undefined }, e.status || fallbackStatus);
 }
 
+function deploymentReadiness() {
+  const checks = [];
+  const add = (id, ok, message, severity = 'required') => {
+    checks.push({ id, ok: !!ok, severity, message });
+  };
+  const defaultSecret = SESSION_SECRET === 'mnemopay-console-dev-secret';
+  add('session-secret', !defaultSecret, defaultSecret ? 'Set MNEMOPAY_SESSION_SECRET or MNEMOPAY_SECRET.' : 'Session secret configured.');
+  add('store-driver', CONSOLE_STORE_DRIVER === 'postgres', `Store driver is ${CONSOLE_STORE_DRIVER}.`, process.env.NODE_ENV === 'production' ? 'required' : 'recommended');
+  add('postgres-url', CONSOLE_STORE_DRIVER !== 'postgres' || !!CONSOLE_POSTGRES_URL, 'Postgres/Neon URL required when using postgres store.');
+  add('stripe-secret', !!process.env.STRIPE_SECRET_KEY, process.env.STRIPE_SECRET_KEY ? 'Stripe secret configured.' : 'Set STRIPE_SECRET_KEY for checkout sessions.', 'recommended');
+  add('stripe-webhook-secret', !!process.env.STRIPE_WEBHOOK_SECRET, process.env.STRIPE_WEBHOOK_SECRET ? 'Stripe webhook secret configured.' : 'Set STRIPE_WEBHOOK_SECRET before live webhooks.', 'recommended');
+  add('resend-key', !!process.env.RESEND_API_KEY, process.env.RESEND_API_KEY ? 'Resend API key configured.' : 'Set RESEND_API_KEY for passwordless email delivery.', 'recommended');
+  add('auth-email-from', !!process.env.MNEMOPAY_AUTH_EMAIL_FROM, process.env.MNEMOPAY_AUTH_EMAIL_FROM ? 'Auth email sender configured.' : 'Set MNEMOPAY_AUTH_EMAIL_FROM for passwordless email delivery.', 'recommended');
+  add('public-url', !!process.env.MNEMOPAY_PUBLIC_URL, process.env.MNEMOPAY_PUBLIC_URL ? 'Public URL configured.' : 'Set MNEMOPAY_PUBLIC_URL for Stripe return URLs.', 'recommended');
+  const requiredOk = checks.filter((check) => check.severity === 'required').every((check) => check.ok);
+  const recommendedOk = checks.every((check) => check.ok);
+  return {
+    ok: requiredOk,
+    productionReady: requiredOk && recommendedOk,
+    storeDriver: CONSOLE_STORE_DRIVER,
+    nodeEnv: process.env.NODE_ENV || 'development',
+    checks,
+  };
+}
+
 function uuid() {
   if (crypto.randomUUID) return crypto.randomUUID();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -2126,7 +2151,16 @@ const server = http.createServer(async (req, res) => {
 
   // Health
   if (pathname === '/healthz') {
-    return json(res, { status: 'ok', mode: 'live', agentId: agent.agentId || 'dashboard-live', storeDriver: CONSOLE_STORE_DRIVER });
+    return json(res, { status: 'ok', mode: 'live', agentId: agent.agentId || 'dashboard-live', storeDriver: CONSOLE_STORE_DRIVER, readiness: deploymentReadiness() });
+  }
+
+  if (pathname === '/readyz') {
+    const readiness = deploymentReadiness();
+    return json(res, { status: readiness.ok ? 'ok' : 'not-ready', ...readiness }, readiness.ok ? 200 : 503);
+  }
+
+  if (pathname === '/api/v1/ops/readiness' && req.method === 'GET') {
+    return json(res, { ok: true, ...deploymentReadiness() });
   }
 
   // ── Static files ────────────────────────────────────────────────────────
