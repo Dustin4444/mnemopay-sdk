@@ -1,4 +1,12 @@
-﻿# mnemopay-sdk status - 2026-05-10 15:47 Codex
+﻿# mnemopay-sdk status - 2026-05-10 16:02 Codex
+
+## Dashboard deployment runbook added
+
+- Added `dashboard/DEPLOYMENT.md` with required production env, Stripe env, Resend env, Fly secret/deploy commands, readiness checks, local production-shaped run command, and verification flow.
+- This gives Claude/Codex/future operator sessions an exact deploy checklist for the hosted MnemoPay console.
+
+---
+# mnemopay-sdk status - 2026-05-10 15:47 Codex
 
 ## Dashboard deployment readiness added
 
