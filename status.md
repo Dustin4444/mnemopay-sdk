@@ -1,4 +1,15 @@
-﻿# mnemopay-sdk status - 2026-05-10 12:35 Codex
+﻿# mnemopay-sdk status - 2026-05-10 13:02 Codex
+
+## Hosted Brain reasoning traces added
+
+- Added `POST /api/v1/brain/reason` to turn recall + graph into a deterministic reasoning trace.
+- Reasoning traces return evidence memories, matched graph entities, supporting edges, confidence, and step metadata.
+- Dashboard Brain panel now has a Reason button and trace card so operators can inspect why the Brain surfaced an answer.
+- Python hosted client now exposes `reason(...)`, with unittest coverage for the new endpoint.
+- This is not LLM-authored reasoning yet. It is the auditable deterministic trace layer that LLM summaries can sit on safely.
+
+---
+# mnemopay-sdk status - 2026-05-10 12:35 Codex
 
 ## Hosted Python client parity started
 

@@ -47,6 +47,21 @@ class MnemoPayHostedClientTest(unittest.TestCase):
             "http://localhost:8787/api/v1/brain/namespaces/forge%20npc%3Amaya/graph?limit=12",
         )
 
+    def test_reason_posts_to_brain_reason_endpoint(self) -> None:
+        client = MnemoPayHostedClient(base_url="http://localhost:8787")
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"ok":true,"answer":"ok","confidence":0.8}'
+
+        with patch("urllib.request.urlopen", return_value=response) as urlopen:
+            payload = client.reason("What matters?", namespace="agent:one")
+
+        self.assertEqual(payload["confidence"], 0.8)
+        req = urlopen.call_args.args[0]
+        self.assertEqual(req.full_url, "http://localhost:8787/api/v1/brain/reason")
+        body = json.loads(req.data.decode("utf-8"))
+        self.assertEqual(body["namespace"], "agent:one")
+        self.assertEqual(body["mode"], "hybrid")
+
 
 if __name__ == "__main__":
     unittest.main()

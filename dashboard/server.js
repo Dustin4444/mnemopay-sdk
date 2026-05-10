@@ -1342,6 +1342,66 @@ async function queryBrain(body, accountId) {
   return { namespace, query, count: scored.length, results: scored.map(publicBrainMemory) };
 }
 
+async function reasonOverBrain(body, accountId) {
+  const namespace = String(body.namespace || 'default').slice(0, 120);
+  const query = String(body.query || '').trim();
+  const limit = Math.max(1, Math.min(12, parseInt(body.limit || '6', 10)));
+  if (!query) throw new Error('query required');
+
+  const recall = await queryBrain({ namespace, query, limit, mode: body.mode || 'hybrid' }, accountId);
+  const graph = brainGraphSnapshot(accountId, namespace, 120);
+  const resultIds = new Set((recall.results || []).map((r) => r.id));
+  const terms = query.toLowerCase().split(/\W+/).filter((term) => term.length > 2);
+  const entities = (graph.entities || []).filter((entity) => {
+    const entityText = `${entity.name} ${entity.normalizedName} ${entity.type}`.toLowerCase();
+    const queryMatch = terms.some((term) => entityText.includes(term));
+    const memoryMatch = (entity.memoryIds || []).some((id) => resultIds.has(id));
+    return queryMatch || memoryMatch;
+  }).slice(0, 12);
+  const entityIds = new Set(entities.map((entity) => entity.id));
+  const edges = (graph.edges || [])
+    .filter((edge) => entityIds.has(edge.subjectId) || entityIds.has(edge.objectId))
+    .slice(0, 16);
+  const evidence = (recall.results || []).slice(0, limit).map((result, index) => ({
+    rank: index + 1,
+    memoryId: result.id,
+    score: result.score || result.importance || 0,
+    content: result.content,
+    tags: result.tags || [],
+  }));
+  const confidence = Math.max(0, Math.min(1, (evidence.length / Math.max(1, limit)) * 0.7 + (entities.length > 0 ? 0.2 : 0) + (edges.length > 0 ? 0.1 : 0)));
+  const answer = evidence.length
+    ? `Found ${evidence.length} relevant memories in ${namespace}. The strongest signals mention ${entities.slice(0, 4).map((e) => e.name).join(', ') || 'matching terms'} and connect through ${edges.length} graph edge${edges.length === 1 ? '' : 's'}.`
+    : `No strong evidence found in ${namespace} for this query.`;
+  const trace = {
+    query,
+    namespace,
+    generatedAt: new Date().toISOString(),
+    mode: body.mode || 'hybrid',
+    confidence: Number(confidence.toFixed(2)),
+    steps: [
+      { name: 'scope', detail: `Searched namespace ${namespace}.` },
+      { name: 'recall', detail: `Ranked ${recall.count || 0} memories with limit ${limit}.` },
+      { name: 'graph', detail: `Loaded ${graph.stats.entities} entities and ${graph.stats.edges} edges.` },
+      { name: 'evidence', detail: `Selected ${evidence.length} memories, ${entities.length} entities, and ${edges.length} edges for the trace.` },
+    ],
+    answer,
+    evidence,
+    entities,
+    edges,
+  };
+  recordAudit(accountId, 'brain.reasoning.trace', `brain:${namespace}`, {
+    namespace,
+    query,
+    evidenceCount: evidence.length,
+    entityCount: entities.length,
+    edgeCount: edges.length,
+    confidence: trace.confidence,
+  });
+  saveConsoleStore();
+  return trace;
+}
+
 function createApiKey(accountId, name = 'default') {
   const secret = `mnemo_${crypto.randomBytes(32).toString('base64url')}`;
   const key = {
@@ -1690,6 +1750,17 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const result = await queryBrain(body, accountId);
       return json(res, { ok: true, ...result });
+    } catch (e) {
+      return errorJson(res, e);
+    }
+  }
+
+  if (pathname === '/api/v1/brain/reason' && req.method === 'POST') {
+    try {
+      const accountId = accountIdForRequest(req);
+      const body = await readBody(req);
+      const trace = await reasonOverBrain(body, accountId);
+      return json(res, { ok: true, ...trace });
     } catch (e) {
       return errorJson(res, e);
     }

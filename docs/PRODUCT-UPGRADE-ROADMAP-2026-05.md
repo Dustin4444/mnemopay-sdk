@@ -165,6 +165,13 @@ Python should not try to mirror every internal TypeScript primitive first. It sh
 - The client supports hosted Brain memory write/query, namespace inspect/export/delete, graph export/rebuild, usage report/export, audit events, and current dashboard rail charge/settle calls.
 - The package is designed for Python agent frameworks, Forge NPC services, and backend jobs that need the hosted Brain without going through MCP.
 
+2026-05-10 reasoning trace progress:
+
+- Added a deterministic hosted Brain reasoning layer at `POST /api/v1/brain/reason`.
+- The endpoint runs recall, attaches entity/edge graph context, and returns evidence memories, matched entities, supporting edges, confidence, and step-by-step trace metadata.
+- Dashboard Brain tab now has a Reason action and trace card.
+- Python hosted client now exposes `client.reason(...)`.
+
 ## SOC 2/compliance path
 
 Start now with lightweight evidence collection. Do not wait until enterprise asks.

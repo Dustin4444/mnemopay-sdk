@@ -113,6 +113,24 @@ class MnemoPayHostedClient:
             },
         )
 
+    def reason(
+        self,
+        query: str,
+        namespace: str = "default",
+        limit: int = 6,
+        mode: str = "hybrid",
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            "/api/v1/brain/reason",
+            {
+                "namespace": namespace,
+                "query": query,
+                "limit": limit,
+                "mode": mode,
+            },
+        )
+
     def namespace(self, namespace: str = "default") -> dict[str, Any]:
         return self.request("GET", f"/api/v1/brain/namespaces/{urllib.parse.quote(namespace, safe='')}")
 
