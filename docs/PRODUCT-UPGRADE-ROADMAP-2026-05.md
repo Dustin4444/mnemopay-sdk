@@ -68,6 +68,13 @@ Production requirements:
 - Privacy: namespace deletion, export, retention policy, consent text.
 - Observability: query latency, token cost, cache hit rate, recall quality feedback.
 
+2026-05-10 persistence progress:
+
+- Added an optional SQLite console store behind `MNEMOPAY_CONSOLE_STORE_DRIVER=sqlite` or `MNEMOPAY_CONSOLE_SQLITE=/path/to/console-store.sqlite`.
+- JSON remains the default local-dev store via `MNEMOPAY_CONSOLE_STORE`.
+- SQLite tables now persist API keys, hosted brain memories, audit events, and usage counters as typed rows with JSON payload copies.
+- This is not the final hosted DB. It is the production-shaped adapter step before Neon/Postgres: the server now has a real database mode, typed tables, restart durability, and a cleaner migration path.
+
 ## Billing, onboarding, metering
 
 Billing must provision the product, not only collect payment.

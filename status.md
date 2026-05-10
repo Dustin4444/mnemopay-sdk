@@ -1,4 +1,18 @@
-﻿# mnemopay-sdk status - 2026-05-10 01:08 Codex
+﻿# mnemopay-sdk status - 2026-05-10 01:30 Codex
+
+## Optional SQLite console store added
+
+- Continued the MnemoPay console/app productionization after shipping namespace controls.
+- `dashboard/server.js` now supports an optional SQLite-backed console store using the existing `better-sqlite3` dependency.
+- Enable with `MNEMOPAY_CONSOLE_STORE_DRIVER=sqlite` or by setting `MNEMOPAY_CONSOLE_SQLITE=/path/to/console-store.sqlite`.
+- JSON remains the default local-dev store through `MNEMOPAY_CONSOLE_STORE`.
+- SQLite tables now persist API keys, hosted brain memories, audit events, and usage counters as typed rows with JSON payload copies.
+- CORS headers now allow `Authorization` and `X-MnemoPay-Account`, which matters for real API clients and dashboard calls outside same-origin dev.
+- Validation passed: `node --check dashboard/server.js`; SQLite restart smoke confirmed API key metadata, hosted brain memory, and audit events survived restart; JSON smoke confirmed the default store path still works.
+- Next: promote this adapter into a hosted DB/Neon service, add auth/session-backed accounts, and wire checkout success into account provisioning and usage metering.
+
+---
+# mnemopay-sdk status - 2026-05-10 01:08 Codex
 
 ## Hosted brain console controls added
 

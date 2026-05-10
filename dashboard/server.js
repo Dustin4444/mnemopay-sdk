@@ -15,6 +15,9 @@ const BRAIN_AGENT_ID = process.env.MNEMOPAY_BRAIN_AGENT_ID || 'hosted-brain';
 const DEFAULT_PLAN = process.env.MNEMOPAY_PLAN || 'free';
 const DEFAULT_ACCOUNT_ID = process.env.MNEMOPAY_ACCOUNT_ID || 'default';
 const CONSOLE_STORE_PATH = process.env.MNEMOPAY_CONSOLE_STORE || path.join(process.cwd(), '.mnemopay-console', 'console-store.json');
+const CONSOLE_STORE_DRIVER = process.env.MNEMOPAY_CONSOLE_STORE_DRIVER || (process.env.MNEMOPAY_CONSOLE_SQLITE ? 'sqlite' : 'json');
+const CONSOLE_SQLITE_PATH = process.env.MNEMOPAY_CONSOLE_SQLITE || path.join(process.cwd(), '.mnemopay-console', 'console-store.sqlite');
+let consoleSqlite;
 
 // ── Initialize the real SDK ─────────────────────────────────────────────────
 let agent;
@@ -273,8 +276,153 @@ function accountIdForRequest(req) {
   return String(Array.isArray(headerAccount) ? headerAccount[0] : headerAccount || DEFAULT_ACCOUNT_ID).slice(0, 120);
 }
 
+function openConsoleSqlite() {
+  if (consoleSqlite) return consoleSqlite;
+  // Optional dependency already ships with the SDK. JSON remains the default dev store.
+  const Database = require('better-sqlite3');
+  fs.mkdirSync(path.dirname(CONSOLE_SQLITE_PATH), { recursive: true });
+  const db = new Database(CONSOLE_SQLITE_PATH);
+  db.pragma('journal_mode = WAL');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS console_api_keys (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      prefix TEXT NOT NULL,
+      key_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT,
+      revoked_at TEXT,
+      payload TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_console_api_keys_account ON console_api_keys(account_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_console_api_keys_hash ON console_api_keys(key_hash);
+
+    CREATE TABLE IF NOT EXISTS console_brain_memories (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      namespace TEXT NOT NULL,
+      content TEXT NOT NULL,
+      importance REAL NOT NULL,
+      tags_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_console_brain_account_namespace ON console_brain_memories(account_id, namespace);
+
+    CREATE TABLE IF NOT EXISTS console_audit_events (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      details_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_console_audit_account_created ON console_audit_events(account_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS console_usage_counters (
+      account_id TEXT PRIMARY KEY,
+      brain_writes INTEGER NOT NULL DEFAULT 0,
+      brain_queries INTEGER NOT NULL DEFAULT 0,
+      rail_charges INTEGER NOT NULL DEFAULT 0,
+      rail_settlements INTEGER NOT NULL DEFAULT 0,
+      payload TEXT NOT NULL
+    );
+  `);
+  consoleSqlite = db;
+  return consoleSqlite;
+}
+
+function loadConsoleStoreFromSqlite() {
+  const db = openConsoleSqlite();
+  for (const row of db.prepare('SELECT payload FROM console_api_keys').all()) {
+    const key = JSON.parse(row.payload);
+    apiKeys.set(key.id, key);
+  }
+  for (const row of db.prepare('SELECT payload FROM console_brain_memories').all()) {
+    const memory = JSON.parse(row.payload);
+    brainMemories.set(memory.id, memory);
+  }
+  for (const row of db.prepare('SELECT payload FROM console_audit_events ORDER BY created_at ASC').all()) {
+    auditEvents.push(JSON.parse(row.payload));
+  }
+  for (const row of db.prepare('SELECT account_id, payload FROM console_usage_counters').all()) {
+    const counters = JSON.parse(row.payload);
+    usageCounters.set(row.account_id, { ...blankUsage(), ...counters });
+  }
+  console.log(`[console-store] loaded ${apiKeys.size} keys, ${brainMemories.size} brain memories, ${auditEvents.length} audit events from sqlite ${CONSOLE_SQLITE_PATH}`);
+}
+
+function saveConsoleStoreToSqlite() {
+  const db = openConsoleSqlite();
+  const usage = {};
+  for (const [accountId, counters] of usageCounters.entries()) usage[accountId] = counters;
+
+  const write = db.transaction(() => {
+    db.prepare('DELETE FROM console_api_keys').run();
+    db.prepare('DELETE FROM console_brain_memories').run();
+    db.prepare('DELETE FROM console_audit_events').run();
+    db.prepare('DELETE FROM console_usage_counters').run();
+
+    const insertKey = db.prepare(`INSERT INTO console_api_keys
+      (id, account_id, name, prefix, key_hash, created_at, last_used_at, revoked_at, payload)
+      VALUES (@id, @accountId, @name, @prefix, @keyHash, @createdAt, @lastUsedAt, @revokedAt, @payload)`);
+    for (const key of apiKeys.values()) {
+      insertKey.run({
+        ...key,
+        lastUsedAt: key.lastUsedAt || null,
+        revokedAt: key.revokedAt || null,
+        payload: JSON.stringify(key),
+      });
+    }
+
+    const insertMemory = db.prepare(`INSERT INTO console_brain_memories
+      (id, account_id, namespace, content, importance, tags_json, created_at, payload)
+      VALUES (@id, @accountId, @namespace, @content, @importance, @tagsJson, @createdAt, @payload)`);
+    for (const memory of brainMemories.values()) {
+      insertMemory.run({
+        ...memory,
+        tagsJson: JSON.stringify(memory.tags || []),
+        payload: JSON.stringify(memory),
+      });
+    }
+
+    const insertAudit = db.prepare(`INSERT INTO console_audit_events
+      (id, account_id, action, subject, details_json, created_at, payload)
+      VALUES (@id, @accountId, @action, @subject, @detailsJson, @createdAt, @payload)`);
+    for (const event of auditEvents) {
+      insertAudit.run({
+        ...event,
+        detailsJson: JSON.stringify(event.details || {}),
+        payload: JSON.stringify(event),
+      });
+    }
+
+    const insertUsage = db.prepare(`INSERT INTO console_usage_counters
+      (account_id, brain_writes, brain_queries, rail_charges, rail_settlements, payload)
+      VALUES (@accountId, @brainWrites, @brainQueries, @railCharges, @railSettlements, @payload)`);
+    for (const [accountId, counters] of Object.entries(usage)) {
+      insertUsage.run({
+        accountId,
+        brainWrites: counters.brainWrites || 0,
+        brainQueries: counters.brainQueries || 0,
+        railCharges: counters.railCharges || 0,
+        railSettlements: counters.railSettlements || 0,
+        payload: JSON.stringify(counters),
+      });
+    }
+  });
+
+  write();
+}
+
 function loadConsoleStore() {
   try {
+    if (CONSOLE_STORE_DRIVER === 'sqlite') {
+      loadConsoleStoreFromSqlite();
+      return;
+    }
     if (!fs.existsSync(CONSOLE_STORE_PATH)) return;
     const raw = fs.readFileSync(CONSOLE_STORE_PATH, 'utf8');
     const data = JSON.parse(raw);
@@ -292,6 +440,10 @@ function loadConsoleStore() {
 
 function saveConsoleStore() {
   try {
+    if (CONSOLE_STORE_DRIVER === 'sqlite') {
+      saveConsoleStoreToSqlite();
+      return;
+    }
     fs.mkdirSync(path.dirname(CONSOLE_STORE_PATH), { recursive: true });
     const usage = {};
     for (const [accountId, counters] of usageCounters.entries()) usage[accountId] = counters;
@@ -422,7 +574,7 @@ const server = http.createServer(async (req, res) => {
   // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-MnemoPay-Account');
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
   const url = new URL(req.url, `http://localhost:${PORT}`);
