@@ -27,6 +27,7 @@ function tableNames(prefix = DEFAULT_PREFIX) {
     usageCounters: `${prefix}_usage_counters`,
     accountPlans: `${prefix}_account_plans`,
     sessions: `${prefix}_sessions`,
+    authChallenges: `${prefix}_auth_challenges`,
     members: `${prefix}_account_members`,
   };
 }
@@ -41,6 +42,7 @@ function normalizeSnapshot(snapshot = {}) {
     usageCounters: snapshot.usageCounters || {},
     accountPlans: snapshot.accountPlans || [],
     consoleSessions: snapshot.consoleSessions || [],
+    authChallenges: snapshot.authChallenges || [],
     accountMembers: snapshot.accountMembers || [],
   };
 }
@@ -160,6 +162,20 @@ function createSchemaSql(prefix = DEFAULT_PREFIX) {
       payload JSONB NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS ${t.sessions}_account_idx ON ${t.sessions}(account_id)`,
+    `CREATE TABLE IF NOT EXISTS ${t.authChallenges} (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      name TEXT,
+      code_hash TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 5,
+      created_at TIMESTAMPTZ NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      payload JSONB NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS ${t.authChallenges}_account_idx ON ${t.authChallenges}(account_id)`,
     `CREATE TABLE IF NOT EXISTS ${t.members} (
       id TEXT PRIMARY KEY,
       account_id TEXT NOT NULL,
@@ -217,6 +233,7 @@ class PostgresConsoleStore {
       usageCounters: Object.fromEntries(usageRows.rows.map((row) => [row.account_id, row.payload])),
       accountPlans: await payloads(t.accountPlans),
       consoleSessions: await payloads(t.sessions),
+      authChallenges: await payloads(t.authChallenges),
       accountMembers: await payloads(t.members),
     };
   }
@@ -284,6 +301,13 @@ class PostgresConsoleStore {
           `INSERT INTO ${t.sessions} (id, account_id, email, name, created_at, last_seen_at, expires_at, payload)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
           [session.id, session.accountId, session.email || null, session.name || null, session.createdAt, session.lastSeenAt || null, session.expiresAt, json(session)],
+        );
+      }
+      for (const challenge of snapshot.authChallenges) {
+        await pool.query(
+          `INSERT INTO ${t.authChallenges} (id, account_id, email, name, code_hash, attempts, max_attempts, created_at, expires_at, used_at, payload)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,
+          [challenge.id, challenge.accountId, challenge.email, challenge.name || null, challenge.codeHash, challenge.attempts || 0, challenge.maxAttempts || 5, challenge.createdAt, challenge.expiresAt, challenge.usedAt || null, json(challenge)],
         );
       }
       for (const member of snapshot.accountMembers) {

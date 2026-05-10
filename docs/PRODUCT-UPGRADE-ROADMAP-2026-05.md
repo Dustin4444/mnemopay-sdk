@@ -77,7 +77,10 @@ Production requirements:
 - Dashboard now has a Session tab for signing into/switching an account, plus visible session state in the Console panel.
 - Added lightweight account members: first signed email becomes owner, owners/admins can add admin/member/viewer records through `GET/POST /api/v1/auth/members`.
 - Dashboard Session tab now shows account members and can add a member while signed in.
-- This is still lightweight console auth. The hosted product still needs a real identity provider and user/account membership model.
+- Added passwordless console auth challenge endpoints: `POST /api/v1/auth/challenge` and `POST /api/v1/auth/verify`.
+- Auth challenges persist in JSON/SQLite/Postgres stores, expire after 10 minutes by default, hash codes with the session secret, enforce attempt limits, and record audit events.
+- Dashboard Session tab now requests and verifies short-lived login codes. Non-production/dev can return the code inline for local testing.
+- This is now a production-shaped passwordless auth foundation. The hosted product still needs email delivery wiring and optional OAuth/SSO.
 
 2026-05-10 hosted Brain graph progress:
 

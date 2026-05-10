@@ -1,4 +1,16 @@
-﻿# mnemopay-sdk status - 2026-05-10 14:35 Codex
+﻿# mnemopay-sdk status - 2026-05-10 15:04 Codex
+
+## Passwordless console auth foundation added
+
+- Added passwordless auth challenges to the MnemoPay dashboard API.
+- New endpoints: `POST /api/v1/auth/challenge` creates a short-lived email code; `POST /api/v1/auth/verify` verifies the code and sets the signed session cookie.
+- Codes are HMAC-hashed with the session secret, expire after `MNEMOPAY_AUTH_CODE_TTL_MS` (default 10 minutes), enforce max attempts, and record audit events.
+- Auth challenges persist across JSON, SQLite, and Postgres console stores.
+- Dashboard Session tab now uses Request Code / Verify and Sign In instead of immediate unsigned login. Non-production can return a dev code inline for local testing.
+- Existing `/api/v1/auth/login` remains as a dev/backcompat endpoint for now.
+
+---
+# mnemopay-sdk status - 2026-05-10 14:35 Codex
 
 ## Live Stripe checkout and portal sessions added
 

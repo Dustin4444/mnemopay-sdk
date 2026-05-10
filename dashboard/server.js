@@ -21,6 +21,8 @@ const CONSOLE_POSTGRES_URL = process.env.MNEMOPAY_CONSOLE_POSTGRES_URL || proces
 const SESSION_COOKIE_NAME = process.env.MNEMOPAY_SESSION_COOKIE || 'mnemo_console_session';
 const SESSION_SECRET = process.env.MNEMOPAY_SESSION_SECRET || process.env.MNEMOPAY_SECRET || 'mnemopay-console-dev-secret';
 const SESSION_TTL_MS = Math.max(3600_000, parseInt(process.env.MNEMOPAY_SESSION_TTL_MS || String(7 * 24 * 3600_000), 10));
+const AUTH_CODE_TTL_MS = Math.max(60_000, parseInt(process.env.MNEMOPAY_AUTH_CODE_TTL_MS || String(10 * 60_000), 10));
+const AUTH_RETURN_CODES = process.env.MNEMOPAY_AUTH_RETURN_CODES === 'true' || process.env.NODE_ENV !== 'production';
 let consoleSqlite;
 let consolePostgresStore;
 let consolePostgresSaveChain = Promise.resolve();
@@ -36,6 +38,7 @@ const usageCounters = new Map();
 const accountPlans = new Map();
 const consoleSessions = new Map();
 const accountMembers = new Map();
+const authChallenges = new Map();
 const auditEvents = [];
 try {
   const SDK = require('../dist/index.js');
@@ -237,6 +240,10 @@ function hashSecret(secret) {
   return crypto.createHash('sha256').update(String(secret)).digest('hex');
 }
 
+function hashAuthCode(code) {
+  return crypto.createHmac('sha256', SESSION_SECRET).update(String(code)).digest('hex');
+}
+
 function hmac(value) {
   return crypto.createHmac('sha256', SESSION_SECRET).update(String(value)).digest('base64url');
 }
@@ -381,6 +388,59 @@ function setSessionCookie(res, sessionId) {
 
 function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`);
+}
+
+function createAuthChallenge({ accountId, email, name }) {
+  const normalizedAccountId = String(accountId || DEFAULT_ACCOUNT_ID).trim().slice(0, 120);
+  const normalizedEmail = String(email || '').trim().toLowerCase().slice(0, 180);
+  if (!normalizedAccountId) throw new Error('accountId required');
+  if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) throw new Error('valid email required');
+  const now = new Date();
+  const code = String(crypto.randomInt(100000, 1000000));
+  const challenge = {
+    id: `auth_${uuid()}`,
+    accountId: normalizedAccountId,
+    email: normalizedEmail,
+    name: name ? String(name).slice(0, 120) : null,
+    codeHash: hashAuthCode(code),
+    attempts: 0,
+    maxAttempts: 5,
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + AUTH_CODE_TTL_MS).toISOString(),
+    usedAt: null,
+  };
+  authChallenges.set(challenge.id, challenge);
+  recordAudit(challenge.accountId, 'auth.challenge.created', `auth:${challenge.id}`, { email: challenge.email, expiresAt: challenge.expiresAt });
+  saveConsoleStore();
+  return { challenge, code };
+}
+
+function publicAuthChallenge(challenge, code) {
+  return {
+    id: challenge.id,
+    accountId: challenge.accountId,
+    email: challenge.email,
+    expiresAt: challenge.expiresAt,
+    devCode: AUTH_RETURN_CODES ? code : undefined,
+  };
+}
+
+function verifyAuthChallenge({ challengeId, code }) {
+  const challenge = authChallenges.get(String(challengeId || ''));
+  if (!challenge) throw Object.assign(new Error('auth challenge not found'), { status: 404 });
+  if (challenge.usedAt) throw Object.assign(new Error('auth challenge already used'), { status: 409 });
+  if (new Date(challenge.expiresAt).getTime() <= Date.now()) throw Object.assign(new Error('auth challenge expired'), { status: 410 });
+  if (challenge.attempts >= challenge.maxAttempts) throw Object.assign(new Error('too many auth attempts'), { status: 429 });
+  challenge.attempts++;
+  if (hashAuthCode(String(code || '').trim()) !== challenge.codeHash) {
+    saveConsoleStore();
+    throw Object.assign(new Error('invalid auth code'), { status: 401, details: { attempts: challenge.attempts, maxAttempts: challenge.maxAttempts } });
+  }
+  challenge.usedAt = new Date().toISOString();
+  const session = createConsoleSession({ accountId: challenge.accountId, email: challenge.email, name: challenge.name });
+  recordAudit(challenge.accountId, 'auth.challenge.verified', `auth:${challenge.id}`, { email: challenge.email, sessionId: session.id });
+  saveConsoleStore();
+  return { challenge, session };
 }
 
 function blankUsage() {
@@ -816,6 +876,21 @@ function openConsoleSqlite() {
     );
     CREATE INDEX IF NOT EXISTS idx_console_sessions_account ON console_sessions(account_id);
 
+    CREATE TABLE IF NOT EXISTS console_auth_challenges (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      name TEXT,
+      code_hash TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 5,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      used_at TEXT,
+      payload TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_console_auth_challenges_account ON console_auth_challenges(account_id);
+
     CREATE TABLE IF NOT EXISTS console_account_members (
       id TEXT PRIMARY KEY,
       account_id TEXT NOT NULL,
@@ -865,6 +940,10 @@ function loadConsoleStoreFromSqlite() {
     const session = JSON.parse(row.payload);
     if (new Date(session.expiresAt).getTime() > Date.now()) consoleSessions.set(row.id, session);
   }
+  for (const row of db.prepare('SELECT id, payload FROM console_auth_challenges').all()) {
+    const challenge = JSON.parse(row.payload);
+    if (!challenge.usedAt && new Date(challenge.expiresAt).getTime() > Date.now()) authChallenges.set(row.id, challenge);
+  }
   for (const row of db.prepare('SELECT id, payload FROM console_account_members').all()) {
     accountMembers.set(row.id, JSON.parse(row.payload));
   }
@@ -885,6 +964,7 @@ function saveConsoleStoreToSqlite() {
     db.prepare('DELETE FROM console_usage_counters').run();
     db.prepare('DELETE FROM console_account_plans').run();
     db.prepare('DELETE FROM console_sessions').run();
+    db.prepare('DELETE FROM console_auth_challenges').run();
     db.prepare('DELETE FROM console_account_members').run();
 
     const insertKey = db.prepare(`INSERT INTO console_api_keys
@@ -989,6 +1069,21 @@ function saveConsoleStoreToSqlite() {
       });
     }
 
+    const insertChallenge = db.prepare(`INSERT INTO console_auth_challenges
+      (id, account_id, email, name, code_hash, attempts, max_attempts, created_at, expires_at, used_at, payload)
+      VALUES (@id, @accountId, @email, @name, @codeHash, @attempts, @maxAttempts, @createdAt, @expiresAt, @usedAt, @payload)`);
+    for (const challenge of authChallenges.values()) {
+      if (challenge.usedAt || new Date(challenge.expiresAt).getTime() <= Date.now()) continue;
+      insertChallenge.run({
+        ...challenge,
+        name: challenge.name || null,
+        usedAt: challenge.usedAt || null,
+        attempts: challenge.attempts || 0,
+        maxAttempts: challenge.maxAttempts || 5,
+        payload: JSON.stringify(challenge),
+      });
+    }
+
     const insertMember = db.prepare(`INSERT INTO console_account_members
       (id, account_id, email, name, role, source, created_at, updated_at, payload)
       VALUES (@id, @accountId, @email, @name, @role, @source, @createdAt, @updatedAt, @payload)`);
@@ -1019,6 +1114,7 @@ function consoleSnapshot() {
     usageCounters: usage,
     accountPlans: Array.from(accountPlans.values()),
     consoleSessions: Array.from(consoleSessions.values()).filter((session) => new Date(session.expiresAt).getTime() > Date.now()),
+    authChallenges: Array.from(authChallenges.values()).filter((challenge) => !challenge.usedAt && new Date(challenge.expiresAt).getTime() > Date.now()),
     accountMembers: Array.from(accountMembers.values()),
   };
 }
@@ -1035,6 +1131,9 @@ function applyConsoleSnapshot(data = {}) {
   for (const row of data.accountPlans || []) accountPlans.set(row.accountId, row);
   for (const row of data.consoleSessions || []) {
     if (new Date(row.expiresAt).getTime() > Date.now()) consoleSessions.set(row.id, row);
+  }
+  for (const row of data.authChallenges || []) {
+    if (!row.usedAt && new Date(row.expiresAt).getTime() > Date.now()) authChallenges.set(row.id, row);
   }
   for (const row of data.accountMembers || []) accountMembers.set(row.id, row);
 }
@@ -1575,6 +1674,27 @@ const server = http.createServer(async (req, res) => {
     const session = sessionForRequest(req);
     if (session) ensureSessionMembership(session);
     return json(res, { ok: true, authenticated: !!session, session: publicSession(session) });
+  }
+
+  if (pathname === '/api/v1/auth/challenge' && req.method === 'POST') {
+    try {
+      const body = await readBody(req);
+      const created = createAuthChallenge(body);
+      return json(res, { ok: true, challenge: publicAuthChallenge(created.challenge, created.code) }, 201);
+    } catch (e) {
+      return errorJson(res, e);
+    }
+  }
+
+  if (pathname === '/api/v1/auth/verify' && req.method === 'POST') {
+    try {
+      const body = await readBody(req);
+      const verified = verifyAuthChallenge(body);
+      setSessionCookie(res, verified.session.id);
+      return json(res, { ok: true, session: publicSession(verified.session), accountId: verified.session.accountId }, 201);
+    } catch (e) {
+      return errorJson(res, e);
+    }
   }
 
   if (pathname === '/api/v1/auth/login' && req.method === 'POST') {

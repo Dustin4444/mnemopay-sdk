@@ -798,6 +798,9 @@ function ControlAuditPanel({ events }) {
 function SessionPanel({ session, accountId, members = [], onLogin, onLogout, onRefresh }) {
   const [nextAccount, setNextAccount] = useState(accountId || 'default');
   const [email, setEmail] = useState('');
+  const [authCode, setAuthCode] = useState('');
+  const [challenge, setChallenge] = useState(null);
+  const [status, setStatus] = useState('');
   const [memberEmail, setMemberEmail] = useState('');
   const [memberRole, setMemberRole] = useState('member');
 
@@ -805,8 +808,19 @@ function SessionPanel({ session, accountId, members = [], onLogin, onLogout, onR
     setNextAccount(accountId || 'default');
   }, [accountId]);
 
-  const submit = async () => {
-    await onLogin(nextAccount, email);
+  const requestCode = async () => {
+    const payload = await api.post('/api/v1/auth/challenge', { accountId: nextAccount, email });
+    setChallenge(payload.challenge);
+    setAuthCode(payload.challenge?.devCode || '');
+    setStatus(payload.challenge?.devCode ? `Dev code ready: ${payload.challenge.devCode}` : `Code sent to ${payload.challenge?.email || email}.`);
+  };
+
+  const verifyCode = async () => {
+    if (!challenge?.id || !authCode.trim()) return;
+    await onLogin(challenge.id, authCode);
+    setStatus('Signed in with passwordless code.');
+    setChallenge(null);
+    setAuthCode('');
   };
 
   const addMember = async () => {
@@ -821,20 +835,25 @@ function SessionPanel({ session, accountId, members = [], onLogin, onLogout, onR
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <p className="text-xs uppercase tracking-wider text-teal mb-2">Console Session</p>
-          <h3 className="text-xl font-bold text-white">{session?.authenticated ? 'Signed session active' : 'Start signed session'}</h3>
-          <p className="text-sm text-gray-400 mt-2">Browser sessions bind dashboard actions to an account before the full hosted auth provider lands.</p>
+          <h3 className="text-xl font-bold text-white">{session?.authenticated ? 'Signed session active' : 'Passwordless console sign-in'}</h3>
+          <p className="text-sm text-gray-400 mt-2">Request a short-lived email code, then verify it to bind dashboard actions to an account.</p>
         </div>
         {session?.authenticated && (
           <button onClick={onLogout} className="px-4 py-2 bg-red-500/15 border border-red-500/25 text-red-200 rounded-lg text-sm">Sign out</button>
         )}
       </div>
-      <div className="grid md:grid-cols-3 gap-3 mt-4">
+      <div className="grid md:grid-cols-4 gap-3 mt-4">
         <input className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none"
           value={nextAccount} onChange={e => setNextAccount(e.target.value)} placeholder="account id" />
         <input className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none"
-          value={email} onChange={e => setEmail(e.target.value)} placeholder="email optional" />
-        <button onClick={submit} className="px-4 py-2 bg-teal text-white rounded-lg text-sm font-medium">{session?.authenticated ? 'Switch Account' : 'Sign In'}</button>
+          value={email} onChange={e => setEmail(e.target.value)} placeholder="email" />
+        <button onClick={requestCode} className="px-4 py-2 bg-white/5 border border-white/10 text-gray-300 rounded-lg text-sm">Request Code</button>
+        <input className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none"
+          value={authCode} onChange={e => setAuthCode(e.target.value)} placeholder="6-digit code" />
+        <button onClick={verifyCode} disabled={!challenge?.id}
+          className="md:col-span-4 px-4 py-2 bg-teal text-white rounded-lg text-sm font-medium disabled:opacity-40">{session?.authenticated ? 'Switch Account' : 'Verify and Sign In'}</button>
       </div>
+      {status && <p className="text-xs text-gray-500 mt-3">{sanitize(status)}</p>}
       {session?.authenticated && (
         <div className="mt-4 grid md:grid-cols-3 gap-3 text-xs">
           <div className="rounded-lg bg-white/5 border border-white/10 p-3">
@@ -1040,10 +1059,11 @@ function Dashboard() {
     setTimeout(fetchAll, 0);
   };
 
-  const loginSession = async (nextAccount, email) => {
+  const loginSession = async (challengeId, code) => {
+    const payload = await api.post('/api/v1/auth/verify', { challengeId, code });
+    const nextAccount = payload.accountId || payload.session?.accountId || accountId;
     setAccountIdState(nextAccount);
     setAccountId(nextAccount);
-    const payload = await api.post('/api/v1/auth/login', { accountId: nextAccount, email });
     setSession({ ok: true, authenticated: true, session: payload.session });
     await fetchAll();
   };
