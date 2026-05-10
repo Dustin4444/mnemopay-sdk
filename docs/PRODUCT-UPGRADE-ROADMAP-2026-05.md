@@ -79,6 +79,16 @@ Production requirements:
 - Dashboard Session tab now shows account members and can add a member while signed in.
 - This is still lightweight console auth. The hosted product still needs a real identity provider and user/account membership model.
 
+2026-05-10 hosted Brain graph progress:
+
+- Added persisted hosted brain entities and edges to JSON/SQLite console stores.
+- Memory writes now run deterministic entity extraction and create namespace-scoped canonical entity nodes plus `co_occurs_with` edges.
+- Added `GET /api/v1/brain/namespaces/:id/graph` for entity/edge graph export.
+- Added `POST /api/v1/brain/namespaces/:id/enrich` to rebuild a namespace graph from stored memories.
+- Console overview now reports brain entity and edge counts.
+- Dashboard Brain tab now has Load Graph/Rebuild Graph controls and an entity/edge preview.
+- This is the deterministic graph foundation. The next Brain layer is LLM-enriched typed edges, summaries, and reasoning traces.
+
 2026-05-10 persistence progress:
 
 - Added an optional SQLite console store behind `MNEMOPAY_CONSOLE_STORE_DRIVER=sqlite` or `MNEMOPAY_CONSOLE_SQLITE=/path/to/console-store.sqlite`.

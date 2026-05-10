@@ -26,6 +26,8 @@ let consoleSqlite;
 let agent;
 let brain;
 const brainMemories = new Map();
+const brainEntities = new Map();
+const brainEdges = new Map();
 const apiKeys = new Map();
 const usageCounters = new Map();
 const accountPlans = new Map();
@@ -674,6 +676,36 @@ function openConsoleSqlite() {
     );
     CREATE INDEX IF NOT EXISTS idx_console_brain_account_namespace ON console_brain_memories(account_id, namespace);
 
+    CREATE TABLE IF NOT EXISTS console_brain_entities (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      namespace TEXT NOT NULL,
+      name TEXT NOT NULL,
+      normalized_name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      aliases_json TEXT NOT NULL,
+      mention_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_console_brain_entities_account_namespace ON console_brain_entities(account_id, namespace);
+
+    CREATE TABLE IF NOT EXISTS console_brain_edges (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      namespace TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      predicate TEXT NOT NULL,
+      object_id TEXT NOT NULL,
+      memory_ids_json TEXT NOT NULL,
+      weight REAL NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_console_brain_edges_account_namespace ON console_brain_edges(account_id, namespace);
+
     CREATE TABLE IF NOT EXISTS console_audit_events (
       id TEXT PRIMARY KEY,
       account_id TEXT NOT NULL,
@@ -748,6 +780,14 @@ function loadConsoleStoreFromSqlite() {
     const memory = JSON.parse(row.payload);
     brainMemories.set(memory.id, memory);
   }
+  for (const row of db.prepare('SELECT payload FROM console_brain_entities').all()) {
+    const entity = JSON.parse(row.payload);
+    brainEntities.set(entity.id, entity);
+  }
+  for (const row of db.prepare('SELECT payload FROM console_brain_edges').all()) {
+    const edge = JSON.parse(row.payload);
+    brainEdges.set(edge.id, edge);
+  }
   for (const row of db.prepare('SELECT payload FROM console_audit_events ORDER BY created_at ASC').all()) {
     auditEvents.push(JSON.parse(row.payload));
   }
@@ -776,6 +816,8 @@ function saveConsoleStoreToSqlite() {
   const write = db.transaction(() => {
     db.prepare('DELETE FROM console_api_keys').run();
     db.prepare('DELETE FROM console_brain_memories').run();
+    db.prepare('DELETE FROM console_brain_entities').run();
+    db.prepare('DELETE FROM console_brain_edges').run();
     db.prepare('DELETE FROM console_audit_events').run();
     db.prepare('DELETE FROM console_usage_counters').run();
     db.prepare('DELETE FROM console_account_plans').run();
@@ -802,6 +844,30 @@ function saveConsoleStoreToSqlite() {
         ...memory,
         tagsJson: JSON.stringify(memory.tags || []),
         payload: JSON.stringify(memory),
+      });
+    }
+
+    const insertEntity = db.prepare(`INSERT INTO console_brain_entities
+      (id, account_id, namespace, name, normalized_name, type, aliases_json, mention_count, created_at, updated_at, payload)
+      VALUES (@id, @accountId, @namespace, @name, @normalizedName, @type, @aliasesJson, @mentionCount, @createdAt, @updatedAt, @payload)`);
+    for (const entity of brainEntities.values()) {
+      insertEntity.run({
+        ...entity,
+        aliasesJson: JSON.stringify(entity.aliases || []),
+        mentionCount: entity.mentionCount || 0,
+        payload: JSON.stringify(entity),
+      });
+    }
+
+    const insertEdge = db.prepare(`INSERT INTO console_brain_edges
+      (id, account_id, namespace, subject_id, predicate, object_id, memory_ids_json, weight, created_at, updated_at, payload)
+      VALUES (@id, @accountId, @namespace, @subjectId, @predicate, @objectId, @memoryIdsJson, @weight, @createdAt, @updatedAt, @payload)`);
+    for (const edge of brainEdges.values()) {
+      insertEdge.run({
+        ...edge,
+        memoryIdsJson: JSON.stringify(edge.memoryIds || []),
+        weight: edge.weight || 1,
+        payload: JSON.stringify(edge),
       });
     }
 
@@ -887,6 +953,8 @@ function loadConsoleStore() {
     const data = JSON.parse(raw);
     for (const row of data.apiKeys || []) apiKeys.set(row.id, row);
     for (const row of data.brainMemories || []) brainMemories.set(row.id, row);
+    for (const row of data.brainEntities || []) brainEntities.set(row.id, row);
+    for (const row of data.brainEdges || []) brainEdges.set(row.id, row);
     for (const row of data.auditEvents || []) auditEvents.push(row);
     for (const [accountId, usage] of Object.entries(data.usageCounters || {})) {
       usageCounters.set(accountId, { ...blankUsage(), ...usage });
@@ -916,6 +984,8 @@ function saveConsoleStore() {
       savedAt: new Date().toISOString(),
       apiKeys: Array.from(apiKeys.values()),
       brainMemories: Array.from(brainMemories.values()),
+      brainEntities: Array.from(brainEntities.values()),
+      brainEdges: Array.from(brainEdges.values()),
       auditEvents,
       usageCounters: usage,
       accountPlans: Array.from(accountPlans.values()),
@@ -939,6 +1009,212 @@ function publicBrainMemory(memory) {
   };
 }
 
+function normalizeBrainEntityName(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s.@-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function inferEntityType(name) {
+  const n = String(name || '');
+  if (/@/.test(n)) return 'person';
+  if (/\.(com|ai|io|dev|app|chat|org|net)\b/i.test(n)) return 'product';
+  if (/\b(inc|llc|ltd|corp|company|construction|flowers|suite|pay|bank|labs|studio|agency|systems)\b/i.test(n)) return 'org';
+  if (/^\d{4}(-\d{2})?(-\d{2})?$/.test(n) || /\b(q[1-4]|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i.test(n)) return 'date';
+  if (/\b(api|sdk|mcp|stripe|webhook|dashboard|console|brain|agent|memory|audit|billing|forge|gridstamp|praetor)\b/i.test(n)) return 'concept';
+  const words = n.trim().split(/\s+/);
+  if (words.length >= 2 && words.length <= 4 && words.every((w) => /^[A-Z][a-zA-Z0-9'.-]+$/.test(w))) return 'person';
+  return 'other';
+}
+
+function extractHostedBrainEntities(content, tags = []) {
+  const text = String(content || '').slice(0, 6000);
+  const found = new Map();
+  const add = (name, type) => {
+    const clean = String(name || '').replace(/\s+/g, ' ').trim();
+    if (clean.length < 3 || clean.length > 80) return;
+    const normalizedName = normalizeBrainEntityName(clean);
+    if (!normalizedName || /^[0-9]+$/.test(normalizedName)) return;
+    if (['account', 'use this', 'hosted brain', 'default'].includes(normalizedName)) return;
+    if (!found.has(normalizedName)) found.set(normalizedName, { name: clean, normalizedName, type: type || inferEntityType(clean) });
+  };
+
+  for (const match of text.matchAll(/\b[A-Z][a-zA-Z0-9'.-]*(?:\s+[A-Z][a-zA-Z0-9'.-]*){0,3}\b/g)) {
+    add(match[0]);
+  }
+  for (const match of text.matchAll(/\b[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})*\b/g)) {
+    add(match[0], 'concept');
+  }
+  for (const match of text.matchAll(/\b[a-z0-9-]+\.(?:com|ai|io|dev|app|chat|org|net)\b/gi)) {
+    add(match[0], 'product');
+  }
+  for (const tag of tags || []) {
+    if (/^[a-z0-9-]{3,40}$/i.test(String(tag))) add(String(tag), 'concept');
+  }
+  return Array.from(found.values()).slice(0, 24);
+}
+
+function brainEntityId(accountId, namespace, normalizedName) {
+  return `ent_${crypto.createHash('sha1').update(`${accountId}:${namespace}:${normalizedName}`).digest('hex').slice(0, 24)}`;
+}
+
+function publicBrainEntity(entity) {
+  return {
+    id: entity.id,
+    accountId: entity.accountId,
+    namespace: entity.namespace,
+    name: entity.name,
+    normalizedName: entity.normalizedName,
+    type: entity.type,
+    aliases: entity.aliases || [],
+    memoryIds: entity.memoryIds || [],
+    mentionCount: entity.mentionCount || 0,
+    createdAt: entity.createdAt,
+    updatedAt: entity.updatedAt,
+  };
+}
+
+function publicBrainEdge(edge) {
+  return {
+    id: edge.id,
+    accountId: edge.accountId,
+    namespace: edge.namespace,
+    subjectId: edge.subjectId,
+    predicate: edge.predicate,
+    objectId: edge.objectId,
+    memoryIds: edge.memoryIds || [],
+    weight: edge.weight || 1,
+    createdAt: edge.createdAt,
+    updatedAt: edge.updatedAt,
+  };
+}
+
+function upsertBrainEntity(accountId, namespace, extracted, memoryId, createdAt) {
+  const normalizedName = extracted.normalizedName || normalizeBrainEntityName(extracted.name);
+  if (!normalizedName) return null;
+  const id = brainEntityId(accountId, namespace, normalizedName);
+  const existing = brainEntities.get(id);
+  const now = createdAt || new Date().toISOString();
+  if (existing) {
+    const memoryIds = new Set(existing.memoryIds || []);
+    memoryIds.add(memoryId);
+    const aliases = new Set(existing.aliases || []);
+    if (existing.name !== extracted.name) aliases.add(extracted.name);
+    existing.aliases = Array.from(aliases);
+    existing.memoryIds = Array.from(memoryIds);
+    existing.mentionCount = existing.memoryIds.length;
+    existing.updatedAt = now;
+    if (existing.type === 'other' && extracted.type) existing.type = extracted.type;
+    return existing;
+  }
+  const entity = {
+    id,
+    accountId,
+    namespace,
+    name: extracted.name,
+    normalizedName,
+    type: extracted.type || inferEntityType(extracted.name),
+    aliases: [],
+    memoryIds: [memoryId],
+    mentionCount: 1,
+    createdAt: now,
+    updatedAt: now,
+  };
+  brainEntities.set(id, entity);
+  return entity;
+}
+
+function brainEdgeId(accountId, namespace, a, b, predicate) {
+  const pair = [a, b].sort().join(':');
+  return `edge_${crypto.createHash('sha1').update(`${accountId}:${namespace}:${predicate}:${pair}`).digest('hex').slice(0, 24)}`;
+}
+
+function upsertBrainEdge(accountId, namespace, subjectId, objectId, memoryId, predicate = 'co_occurs_with', createdAt) {
+  if (!subjectId || !objectId || subjectId === objectId) return null;
+  const id = brainEdgeId(accountId, namespace, subjectId, objectId, predicate);
+  const now = createdAt || new Date().toISOString();
+  const existing = brainEdges.get(id);
+  if (existing) {
+    const memoryIds = new Set(existing.memoryIds || []);
+    memoryIds.add(memoryId);
+    existing.memoryIds = Array.from(memoryIds);
+    existing.weight = existing.memoryIds.length;
+    existing.updatedAt = now;
+    return existing;
+  }
+  const [left, right] = [subjectId, objectId].sort();
+  const edge = {
+    id,
+    accountId,
+    namespace,
+    subjectId: left,
+    predicate,
+    objectId: right,
+    memoryIds: [memoryId],
+    weight: 1,
+    createdAt: now,
+    updatedAt: now,
+  };
+  brainEdges.set(id, edge);
+  return edge;
+}
+
+function ingestMemoryGraph(memory) {
+  const entities = extractHostedBrainEntities(memory.content, memory.tags);
+  const nodes = entities
+    .map((entity) => upsertBrainEntity(memory.accountId, memory.namespace, entity, memory.id, memory.createdAt))
+    .filter(Boolean);
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      upsertBrainEdge(memory.accountId, memory.namespace, nodes[i].id, nodes[j].id, memory.id, 'co_occurs_with', memory.createdAt);
+    }
+  }
+  return { entities: nodes.map(publicBrainEntity), edgesCreated: Math.max(0, (nodes.length * (nodes.length - 1)) / 2) };
+}
+
+function clearBrainGraph(accountId, namespace) {
+  for (const [id, entity] of brainEntities.entries()) {
+    if (entity.accountId === accountId && entity.namespace === namespace) brainEntities.delete(id);
+  }
+  for (const [id, edge] of brainEdges.entries()) {
+    if (edge.accountId === accountId && edge.namespace === namespace) brainEdges.delete(id);
+  }
+}
+
+function rebuildBrainGraph(accountId, namespace) {
+  clearBrainGraph(accountId, namespace);
+  const rows = Array.from(brainMemories.values()).filter((m) => m.accountId === accountId && m.namespace === namespace);
+  for (const memory of rows) ingestMemoryGraph(memory);
+  return brainGraphSnapshot(accountId, namespace);
+}
+
+function brainGraphSnapshot(accountId, namespace, limit = 200) {
+  const entities = Array.from(brainEntities.values())
+    .filter((entity) => entity.accountId === accountId && entity.namespace === namespace)
+    .sort((a, b) => (b.mentionCount || 0) - (a.mentionCount || 0))
+    .slice(0, limit)
+    .map(publicBrainEntity);
+  const entityIds = new Set(entities.map((entity) => entity.id));
+  const edges = Array.from(brainEdges.values())
+    .filter((edge) => edge.accountId === accountId && edge.namespace === namespace && entityIds.has(edge.subjectId) && entityIds.has(edge.objectId))
+    .sort((a, b) => (b.weight || 0) - (a.weight || 0))
+    .slice(0, limit * 2)
+    .map(publicBrainEdge);
+  return {
+    accountId,
+    namespace,
+    entities,
+    edges,
+    stats: {
+      memories: Array.from(brainMemories.values()).filter((m) => m.accountId === accountId && m.namespace === namespace).length,
+      entities: entities.length,
+      edges: edges.length,
+    },
+  };
+}
+
 async function storeBrainMemory(body, accountId) {
   const namespace = String(body.namespace || 'default').slice(0, 120);
   const content = String(body.content || '').trim();
@@ -952,6 +1228,10 @@ async function storeBrainMemory(body, accountId) {
   brainMemories.set(id, memory);
   if (!body.systemWrite) usageForAccount(accountId).brainWrites++;
   recordAudit(accountId, 'brain.memory.created', `brain:${namespace}`, { memoryId: id, namespace, tags, importance });
+  const graph = ingestMemoryGraph(memory);
+  if (graph.entities.length > 0) {
+    recordAudit(accountId, 'brain.graph.enriched', `brain:${namespace}`, { memoryId: id, entityCount: graph.entities.length });
+  }
   if (brain?.embed) {
     await brain.embed(id, content, { accountId, namespace, tags, importance, createdAt });
   }
@@ -1282,6 +1562,8 @@ const server = http.createServer(async (req, res) => {
         mode: brain ? 'recall-engine' : 'fallback',
         namespaces: Array.from(new Set(accountMemories.map((m) => m.namespace))).length,
         memories: accountMemories.length,
+        entities: Array.from(brainEntities.values()).filter((entity) => entity.accountId === accountId).length,
+        edges: Array.from(brainEdges.values()).filter((edge) => edge.accountId === accountId).length,
       },
     });
   }
@@ -1413,12 +1695,29 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (pathname.startsWith('/api/v1/brain/namespaces/') && !pathname.endsWith('/export') && req.method === 'GET') {
+  if (pathname.startsWith('/api/v1/brain/namespaces/') && pathname.endsWith('/graph') && req.method === 'GET') {
+    const accountId = accountIdForRequest(req);
+    const namespace = decodeURIComponent(pathname.split('/')[5] || 'default');
+    const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get('limit') || '200', 10)));
+    return json(res, { ok: true, ...brainGraphSnapshot(accountId, namespace, limit) });
+  }
+
+  if (pathname.startsWith('/api/v1/brain/namespaces/') && pathname.endsWith('/enrich') && req.method === 'POST') {
+    const accountId = accountIdForRequest(req);
+    const namespace = decodeURIComponent(pathname.split('/')[5] || 'default');
+    const graph = rebuildBrainGraph(accountId, namespace);
+    recordAudit(accountId, 'brain.graph.rebuilt', `brain:${namespace}`, graph.stats);
+    saveConsoleStore();
+    return json(res, { ok: true, ...graph });
+  }
+
+  if (pathname.startsWith('/api/v1/brain/namespaces/') && !pathname.endsWith('/export') && !pathname.endsWith('/graph') && !pathname.endsWith('/enrich') && req.method === 'GET') {
     const accountId = accountIdForRequest(req);
     const namespace = decodeURIComponent(pathname.split('/').pop() || 'default');
     const rows = Array.from(brainMemories.values()).filter((m) => m.accountId === accountId && m.namespace === namespace);
     const lastWrite = rows.map((m) => m.createdAt).sort().pop() || null;
-    return json(res, { ok: true, accountId, namespace, memoryCount: rows.length, lastWrite, mode: brain ? 'recall-engine' : 'fallback' });
+    const graph = brainGraphSnapshot(accountId, namespace, 1);
+    return json(res, { ok: true, accountId, namespace, memoryCount: rows.length, lastWrite, mode: brain ? 'recall-engine' : 'fallback', graph: graph.stats });
   }
 
   if (pathname.startsWith('/api/v1/brain/namespaces/') && pathname.endsWith('/export') && req.method === 'GET') {
@@ -1443,6 +1742,7 @@ const server = http.createServer(async (req, res) => {
         deleted++;
       }
     }
+    clearBrainGraph(accountId, namespace);
     recordAudit(accountId, 'brain.namespace.deleted', `brain:${namespace}`, { namespace, deleted });
     saveConsoleStore();
     return json(res, { ok: true, accountId, namespace, deleted });

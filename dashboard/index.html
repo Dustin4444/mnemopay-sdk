@@ -453,6 +453,7 @@ function BrainPanel({ onRefresh }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [exported, setExported] = useState(null);
+  const [graph, setGraph] = useState(null);
   const [status, setStatus] = useState('');
 
   const storeMemory = async () => {
@@ -474,6 +475,20 @@ function BrainPanel({ onRefresh }) {
     const payload = await api.get(`/api/v1/brain/namespaces/${encodeURIComponent(namespace)}/export`);
     setExported(payload);
     setStatus(`Exported ${(payload.memories || []).length} memories from ${payload.namespace}.`);
+    onRefresh();
+  };
+
+  const loadGraph = async () => {
+    const payload = await api.get(`/api/v1/brain/namespaces/${encodeURIComponent(namespace)}/graph`);
+    setGraph(payload);
+    setStatus(`Loaded graph: ${payload.stats?.entities || 0} entities, ${payload.stats?.edges || 0} edges.`);
+    onRefresh();
+  };
+
+  const rebuildGraph = async () => {
+    const payload = await api.post(`/api/v1/brain/namespaces/${encodeURIComponent(namespace)}/enrich`, {});
+    setGraph(payload);
+    setStatus(`Rebuilt graph: ${payload.stats?.entities || 0} entities, ${payload.stats?.edges || 0} edges.`);
     onRefresh();
   };
 
@@ -513,6 +528,8 @@ function BrainPanel({ onRefresh }) {
         <div className="flex flex-wrap gap-2 mt-3">
           <button onClick={storeMemory} className="px-4 py-2 bg-teal text-white rounded-lg text-sm font-medium">Store Memory</button>
           <button onClick={exportNamespace} className="px-4 py-2 bg-white/5 border border-white/10 text-gray-300 rounded-lg text-sm">Export Namespace</button>
+          <button onClick={loadGraph} className="px-4 py-2 bg-white/5 border border-white/10 text-gray-300 rounded-lg text-sm">Load Graph</button>
+          <button onClick={rebuildGraph} className="px-4 py-2 bg-white/5 border border-white/10 text-gray-300 rounded-lg text-sm">Rebuild Graph</button>
           <button onClick={downloadExport} disabled={!exported} className="px-4 py-2 bg-white/5 border border-white/10 text-gray-300 rounded-lg text-sm disabled:opacity-40">Download JSON</button>
           <button onClick={deleteNamespace} className="px-4 py-2 bg-red-500/15 border border-red-500/25 text-red-200 rounded-lg text-sm">Delete Namespace</button>
         </div>
@@ -535,6 +552,41 @@ function BrainPanel({ onRefresh }) {
           {results.length === 0 && <p className="text-sm text-gray-500">No query results yet.</p>}
         </div>
       </div>
+
+      {graph && (
+        <div className="glass rounded-xl p-4">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-300">Knowledge Graph: {sanitize(graph.namespace)}</h3>
+              <p className="text-xs text-gray-500 mt-1">{graph.stats?.entities || 0} entities · {graph.stats?.edges || 0} edges · {graph.stats?.memories || 0} memories</p>
+            </div>
+            <button onClick={rebuildGraph} className="px-3 py-1.5 bg-white/5 border border-white/10 text-gray-300 rounded-lg text-xs">Rebuild</button>
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div className="rounded-lg border border-white/10 overflow-hidden">
+              {(graph.entities || []).slice(0, 12).map(entity => (
+                <div key={entity.id} className="px-3 py-2 border-b border-white/5 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm text-white">{sanitize(entity.name)}</div>
+                    <div className="text-xs text-gray-500">{sanitize(entity.type)} · {entity.mentionCount || 0} mentions</div>
+                  </div>
+                  <span className="text-[10px] text-gray-500 font-mono">{entity.id.slice(0, 10)}</span>
+                </div>
+              ))}
+              {(!graph.entities || graph.entities.length === 0) && <div className="px-3 py-6 text-center text-sm text-gray-500">No entities yet.</div>}
+            </div>
+            <div className="rounded-lg border border-white/10 overflow-hidden">
+              {(graph.edges || []).slice(0, 12).map(edge => (
+                <div key={edge.id} className="px-3 py-2 border-b border-white/5">
+                  <div className="text-xs text-teal font-mono">{sanitize(edge.predicate)}</div>
+                  <div className="text-xs text-gray-500 mt-1">{edge.subjectId.slice(0, 10)} -> {edge.objectId.slice(0, 10)} · weight {edge.weight || 1}</div>
+                </div>
+              ))}
+              {(!graph.edges || graph.edges.length === 0) && <div className="px-3 py-6 text-center text-sm text-gray-500">No edges yet.</div>}
+            </div>
+          </div>
+        </div>
+      )}
 
       {exported && (
         <div className="glass rounded-xl p-4">

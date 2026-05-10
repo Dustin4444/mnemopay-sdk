@@ -1,4 +1,20 @@
-﻿# mnemopay-sdk status - 2026-05-10 09:22 Codex
+﻿# mnemopay-sdk status - 2026-05-10 09:52 Codex
+
+## Hosted Brain graph foundation added
+
+- Started knocking out the full Brain path after account members.
+- `dashboard/server.js` now persists hosted brain entities and graph edges in JSON/SQLite stores.
+- Memory writes run deterministic entity extraction and create namespace-scoped canonical entity nodes plus `co_occurs_with` edges.
+- Added `GET /api/v1/brain/namespaces/:id/graph` for entity/edge graph export.
+- Added `POST /api/v1/brain/namespaces/:id/enrich` to rebuild a namespace graph from stored memories.
+- Namespace delete now also clears that namespace graph.
+- Console overview now reports brain entity and edge counts.
+- Dashboard Brain tab now has Load Graph/Rebuild Graph controls and entity/edge preview.
+- Validation passed: `node --check dashboard/server.js`; SQLite brain graph smoke verified UI control, two memory writes, entity/edge counts, graph rebuild, overview counts, and `brain.graph.rebuilt` audit event.
+- This is the deterministic graph foundation. Next Brain layer: LLM-enriched typed edges, summaries, and reasoning traces over graph + recall results.
+
+---
+# mnemopay-sdk status - 2026-05-10 09:22 Codex
 
 ## Lightweight account membership added
 
