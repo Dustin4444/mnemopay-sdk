@@ -1,4 +1,20 @@
-﻿# mnemopay-sdk status - 2026-05-10 00:28 Codex
+﻿# mnemopay-sdk status - 2026-05-10 00:45 Codex
+
+## Dashboard UI panels started for MnemoPay console
+
+- After committing and pushing the control-layer checkpoint, started the next build: visible dashboard panels over the new `/api/v1` console endpoints.
+- `dashboard/index.html` now has account-aware API headers using localStorage account id (`mnemopay.dashboard.account`) and `X-MnemoPay-Account`.
+- Added new UI panels: Console overview, Hosted Brain, Developer API Keys, Billing/Onboarding, and Control Audit.
+- Console panel shows positioning, account selector, brain writes, brain queries, rail holds, API key count, brain memory count, and onboarding task state.
+- Developer panel can create API keys, show one-time secret reveal, list keys, and revoke keys.
+- Brain panel can store memory, query a namespace, and export a namespace.
+- Billing panel renders provisioning/onboarding state from `/api/v1/billing/onboarding` via the overview payload.
+- Control Audit panel renders account-scoped events from `/api/v1/audit/events`.
+- Validation: local smoke on temp store/port served dashboard HTML 200, confirmed `ConsolePanel` was in HTML, `/api/v1/console/overview` returned ok, API key creation returned ok, and audit feed contained the key-created event.
+- Next: improve dashboard UX polish, add namespace delete/export download affordances, and consider moving the single-file dashboard into a real frontend bundle once API contracts settle.
+
+---
+# mnemopay-sdk status - 2026-05-10 00:28 Codex
 
 ## Console control layer added: revoke, export, audit events
 
@@ -167,6 +183,7 @@ See `bizsuite-site/status.md` and `~/.claude/projects/.../memory/project_session
 - **Console v0.2** â€” auth, live data wiring (currently mock), real charter editor.
 - Explore **promoting `alpha` â†’ `latest`** once external integrators confirm x402/AP2 work end-to-end against live counterparties.
 - **SOC 2 Type II** ops process (Q3 2026 Vanta start, Q1 2027 audit) â€” separate workstream.
+
 
 
 

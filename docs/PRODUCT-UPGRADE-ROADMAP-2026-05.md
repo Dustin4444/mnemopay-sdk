@@ -152,3 +152,5 @@ Vanta/Drata can come later. The first win is having the artifacts and operationa
 - Added namespace export endpoint: `GET /api/v1/brain/namespaces/:id/export`.
 - Added audit event endpoint: `GET /api/v1/audit/events?limit=50`.
 - Control-layer smoke verified namespace export, revoke, revoked-bearer fallback, audit event persistence after restart, and export/revoke audit events.
+- Started dashboard UI panels over `/api/v1`: Console, Hosted Brain, API Keys, Billing, and Control Audit.
+- UI smoke verified dashboard HTML serves, Console panel is present, overview endpoint works, API key creation works, and audit feed records the key-created event.
