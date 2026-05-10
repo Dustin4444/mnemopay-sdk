@@ -1,4 +1,15 @@
-﻿# mnemopay-sdk status - 2026-05-10 13:02 Codex
+﻿# mnemopay-sdk status - 2026-05-10 13:36 Codex
+
+## Postgres console-store bridge added
+
+- Added `dashboard/console-postgres-store.cjs` as the production DB bridge for hosted MnemoPay console state.
+- The adapter keeps `pg` optional, validates table prefixes, bootstraps typed Postgres tables, and persists the same console snapshot currently held in JSON/SQLite.
+- Tables cover API keys, Brain memories, Brain entities, Brain edges, audit events, usage counters, account plans, console sessions, and account members.
+- Added `dashboard/console-postgres-store.test.cjs` with mock-pool coverage for schema generation, identifier safety, transaction save, and snapshot load.
+- This is the safe adapter slice before wiring the live dashboard server to async `MNEMOPAY_CONSOLE_STORE_DRIVER=postgres` startup.
+
+---
+# mnemopay-sdk status - 2026-05-10 13:02 Codex
 
 ## Hosted Brain reasoning traces added
 
