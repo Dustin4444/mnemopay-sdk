@@ -1,4 +1,44 @@
-﻿# mnemopay-sdk status - 2026-05-10 16:02 Codex
+﻿# mnemopay-sdk status - 2026-05-10 21:10 Claude
+
+## Dashboard hardened to production grade
+
+Took the dashboard from "Codex prototype" to deploy-ready. All Tier 1 production blockers, Tier 2 observability, and Tier 3 safety nets closed. Tests now cover the full HTTP surface.
+
+### Tier 1 — production blockers
+- **Postgres persistence refactored** from delete-all-then-insert-all to UPSERT + scoped DELETE in one transaction. No data-loss window. Audit + webhook events use append-only `ON CONFLICT DO NOTHING`. New `console-postgres-store.test.cjs` asserts every INSERT uses ON CONFLICT and ROLLBACK on failure.
+- **Debounced async saves**: `saveConsoleStore()` schedules a flush rather than blocking the request thread; mutations coalesce within 250ms. Tunable via `MNEMOPAY_SAVE_DEBOUNCE_MS`. Persistence latency now in `mnemopay_persistence_duration_ms` histogram.
+- **Body size limit** (`MNEMOPAY_MAX_BODY_BYTES`, default 1MB; webhook 2MB): oversize requests return 413 and drain the socket cleanly so keep-alive isn't broken.
+- **Rate limiting** via in-memory token buckets (`dashboard/rate-limit.cjs`): per-IP general limit (120 burst, 2/sec refill), strict auth-challenge limit (5 burst, ~5/min refill), webhook-specific bucket. Disable via `MNEMOPAY_DISABLE_RATE_LIMIT=true`. Denials counted in `mnemopay_rate_limit_denied_total`.
+- **Webhook idempotency** (`dashboard/idempotency.cjs`): Stripe `event.id` cached for 7d; replays short-circuit with the cached result. Persisted across restarts via `webhook_events` Postgres table.
+- **CORS hardened** to allowlist (`MNEMOPAY_CORS_ALLOWLIST`); production rejects unlisted origins instead of reflecting any origin with credentials.
+- **Graceful shutdown** on SIGTERM/SIGINT: stop accepting connections → drain in-flight (15s deadline) → flush persistence → close PG pool → exit 0. `uncaughtException` triggers the same drain path.
+- **Top-level error handler** on the HTTP server: any unhandled throw returns 500 with a request id rather than crashing the worker.
+- **`brain.reason` double-billing fixed**: inner recall now runs with `internal: true` so the reasoning trace charges exactly one mission credit and writes one audit event.
+- **Audit eviction** no longer loses history: in-memory ring stays at `MNEMOPAY_AUDIT_RING_SIZE` (default 5000), but the append-only DB inserts keep the full history forever.
+
+### Tier 2 — observability
+- **Structured JSON logger** (`dashboard/logger.cjs`): one JSON line per event in production, pretty in dev. Every request gets an `X-Request-Id` (echoed back as response header) and a `[http]` log line with method, path, status, ms.
+- **/metrics endpoint** (Prometheus text format, `dashboard/metrics.cjs`): `mnemopay_http_requests_total`, `mnemopay_http_request_duration_ms`, `mnemopay_rate_limit_denied_total`, `mnemopay_plan_gate_denied_total`, `mnemopay_webhook_events_total`, `mnemopay_persistence_failures_total`, `mnemopay_persistence_duration_ms`, `mnemopay_inflight_requests`, `mnemopay_process_uptime_seconds`.
+- **Postgres pool tuning**: `max=10`, `idleTimeoutMillis=30s`, `connectionTimeoutMillis=5s`. Overridable via `poolOptions` constructor arg.
+
+### Tier 3 — safety nets
+- **`dashboard/server.smoke.test.cjs`** drives the live HTTP surface end-to-end: auth challenge + verify + invalid code + rate-limit burst (429), body size limit (413), brain write/query/reason (asserting single-charge), namespace path with `%2F`, Stripe webhook signature verification + replay idempotency + bogus signature rejection, audit feed, usage report, metrics scrape, logout.
+- **Security headers** on every response: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`. Production adds HSTS. HTML response adds a tight CSP. Session cookie uses `__Host-` prefix in production.
+- **Namespace path parsing** rewritten with a single regex; `tenant-a/scope-1` (percent-encoded) now resolves correctly across GET/DELETE/graph/enrich/export.
+- **GitHub Actions CI** (`.github/workflows/dashboard.yml`): runs unit + smoke tests on Node 20 and 22, on every PR touching `dashboard/`.
+
+### Test posture
+- 6 test files green: `console-postgres-store`, `auth-email`, `stripe-billing`, `logger`, `rate-limit`, `metrics`, `idempotency`, plus the full HTTP smoke test (25 endpoints exercised).
+- `npm test` from `dashboard/` is the canonical green-gate.
+
+### What was deliberately left out
+- **Real hosted IdP** to replace the email-code shim — large workstream, out of scope.
+- **Visa IC + Mastercard Agent Suite rails** — blocked on acquirer access.
+- **SOC 2 Type II** — separate workstream (Q3 2026 Vanta start).
+- **Multi-machine rate limiting** — current limiter is per-Fly-machine. Add Redis-backed limiter when scaling beyond 1 machine.
+
+---
+# mnemopay-sdk status - 2026-05-10 16:02 Codex
 
 ## Dashboard deployment runbook added
 

@@ -69,16 +69,47 @@ fly secrets set \
 fly deploy
 ```
 
-## Readiness
+## Optional production env
 
 ```bash
-curl https://dashboard.mnemopay.com/readyz
-curl https://dashboard.mnemopay.com/api/v1/ops/readiness
+# CORS allowlist (comma-separated). Without this, prod rejects cross-origin
+# requests with credentials. Set to your console host.
+MNEMOPAY_CORS_ALLOWLIST=https://dashboard.mnemopay.com,https://mnemopay.com
+
+# Body / webhook size caps. Defaults are 1MB / 2MB.
+MNEMOPAY_MAX_BODY_BYTES=1048576
+MNEMOPAY_MAX_WEBHOOK_BODY_BYTES=2097152
+
+# Rate limit knobs. Token-bucket: capacity = burst, refill = tokens/sec.
+MNEMOPAY_RATE_GENERAL_CAPACITY=120
+MNEMOPAY_RATE_GENERAL_REFILL=2
+MNEMOPAY_RATE_AUTH_CAPACITY=5
+MNEMOPAY_RATE_AUTH_REFILL=0.0833
+MNEMOPAY_RATE_WEBHOOK_CAPACITY=60
+MNEMOPAY_RATE_WEBHOOK_REFILL=5
+
+# Persistence flush debounce (ms). 0 = synchronous flush per mutation.
+MNEMOPAY_SAVE_DEBOUNCE_MS=250
+
+# Log level: debug | info | warn | error.
+MNEMOPAY_LOG_LEVEL=info
 ```
 
-`/readyz` returns `503` when required production config is missing. Recommended
-items such as Stripe and Resend may show as incomplete while the service remains
-bootable.
+## Health & observability
+
+```bash
+# Liveness — process up + event loop responsive.
+curl https://dashboard.mnemopay.com/healthz
+
+# Readiness — deps reachable + required config present. 503 when not ready.
+curl https://dashboard.mnemopay.com/readyz
+curl https://dashboard.mnemopay.com/api/v1/ops/readiness
+
+# Prometheus metrics scrape.
+curl https://dashboard.mnemopay.com/metrics
+```
+
+Exposed metrics: `mnemopay_http_requests_total`, `mnemopay_http_request_duration_ms` (histogram), `mnemopay_rate_limit_denied_total`, `mnemopay_plan_gate_denied_total`, `mnemopay_webhook_events_total`, `mnemopay_persistence_failures_total`, `mnemopay_persistence_duration_ms`, `mnemopay_process_uptime_seconds`.
 
 ## Local production-shaped run
 

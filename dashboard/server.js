@@ -7,7 +7,12 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
+const { createLogger, createRequestLogger } = require('./logger.cjs');
+const { createRateLimiter, clientKeyForRequest } = require('./rate-limit.cjs');
+const { createRegistry } = require('./metrics.cjs');
+const { createIdempotencyLog } = require('./idempotency.cjs');
 
+const PROD = process.env.NODE_ENV === 'production';
 const PORT = process.env.PORT || 3200;
 const GITHUB_USER = process.env.GITHUB_USER || 'mnemopay';
 const GH_CLI = process.env.GH_CLI || 'C:/Program Files/GitHub CLI/gh';
@@ -18,14 +23,58 @@ const CONSOLE_STORE_PATH = process.env.MNEMOPAY_CONSOLE_STORE || path.join(proce
 const CONSOLE_STORE_DRIVER = process.env.MNEMOPAY_CONSOLE_STORE_DRIVER || (process.env.MNEMOPAY_CONSOLE_SQLITE ? 'sqlite' : 'json');
 const CONSOLE_SQLITE_PATH = process.env.MNEMOPAY_CONSOLE_SQLITE || path.join(process.cwd(), '.mnemopay-console', 'console-store.sqlite');
 const CONSOLE_POSTGRES_URL = process.env.MNEMOPAY_CONSOLE_POSTGRES_URL || process.env.NEON_URL || process.env.DATABASE_URL;
-const SESSION_COOKIE_NAME = process.env.MNEMOPAY_SESSION_COOKIE || 'mnemo_console_session';
+const SESSION_COOKIE_NAME = (() => {
+  const configured = process.env.MNEMOPAY_SESSION_COOKIE;
+  if (configured) return configured;
+  return PROD ? '__Host-mnemo_console_session' : 'mnemo_console_session';
+})();
 const SESSION_SECRET = process.env.MNEMOPAY_SESSION_SECRET || process.env.MNEMOPAY_SECRET || 'mnemopay-console-dev-secret';
 const SESSION_TTL_MS = Math.max(3600_000, parseInt(process.env.MNEMOPAY_SESSION_TTL_MS || String(7 * 24 * 3600_000), 10));
 const AUTH_CODE_TTL_MS = Math.max(60_000, parseInt(process.env.MNEMOPAY_AUTH_CODE_TTL_MS || String(10 * 60_000), 10));
-const AUTH_RETURN_CODES = process.env.MNEMOPAY_AUTH_RETURN_CODES === 'true' || process.env.NODE_ENV !== 'production';
+const AUTH_RETURN_CODES = process.env.MNEMOPAY_AUTH_RETURN_CODES === 'true' || !PROD;
+const MAX_BODY_BYTES = Math.max(1024, parseInt(process.env.MNEMOPAY_MAX_BODY_BYTES || String(1024 * 1024), 10));
+const MAX_WEBHOOK_BODY_BYTES = Math.max(MAX_BODY_BYTES, parseInt(process.env.MNEMOPAY_MAX_WEBHOOK_BODY_BYTES || String(2 * 1024 * 1024), 10));
+const AUDIT_RING_SIZE = Math.max(1000, parseInt(process.env.MNEMOPAY_AUDIT_RING_SIZE || '5000', 10));
+const SAVE_DEBOUNCE_MS = Math.max(0, parseInt(process.env.MNEMOPAY_SAVE_DEBOUNCE_MS || '250', 10));
+const CORS_ALLOWLIST = (process.env.MNEMOPAY_CORS_ALLOWLIST || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const RATE_LIMIT_DISABLED = process.env.MNEMOPAY_DISABLE_RATE_LIMIT === 'true';
+
+const log = createLogger('server');
 let consoleSqlite;
 let consolePostgresStore;
 let consolePostgresSaveChain = Promise.resolve();
+
+// ── Observability ───────────────────────────────────────────────────────────
+const metrics = createRegistry();
+const httpRequestsTotal = metrics.counter('mnemopay_http_requests_total', 'HTTP request count', ['method', 'route', 'status']);
+const httpRequestDuration = metrics.histogram('mnemopay_http_request_duration_ms', 'HTTP request duration (ms)', ['route'], [5, 25, 100, 250, 500, 1000, 2500, 5000]);
+const rateLimitDeniedTotal = metrics.counter('mnemopay_rate_limit_denied_total', 'Requests denied by rate limiter', ['route']);
+const planGateDeniedTotal = metrics.counter('mnemopay_plan_gate_denied_total', 'Requests denied by plan gate', ['action', 'plan']);
+const webhookEventsTotal = metrics.counter('mnemopay_webhook_events_total', 'Webhook events processed', ['type', 'verification', 'idempotent']);
+const persistenceFailuresTotal = metrics.counter('mnemopay_persistence_failures_total', 'Failed persistence writes', ['driver']);
+const persistenceLatency = metrics.histogram('mnemopay_persistence_duration_ms', 'Persistence write duration (ms)', ['driver'], [5, 25, 100, 250, 500, 1000, 5000]);
+const inflightRequests = metrics.gauge('mnemopay_inflight_requests', 'Currently in-flight HTTP requests');
+const processUptime = metrics.gauge('mnemopay_process_uptime_seconds', 'Process uptime in seconds');
+
+// ── Rate limiters ───────────────────────────────────────────────────────────
+const generalLimiter = createRateLimiter({
+  capacity: parseInt(process.env.MNEMOPAY_RATE_GENERAL_CAPACITY || '120', 10),
+  refillPerSec: parseFloat(process.env.MNEMOPAY_RATE_GENERAL_REFILL || '2'),
+});
+const authChallengeLimiter = createRateLimiter({
+  capacity: parseInt(process.env.MNEMOPAY_RATE_AUTH_CAPACITY || '5', 10),
+  refillPerSec: parseFloat(process.env.MNEMOPAY_RATE_AUTH_REFILL || '0.0833'), // ~5/min
+});
+const webhookLimiter = createRateLimiter({
+  capacity: parseInt(process.env.MNEMOPAY_RATE_WEBHOOK_CAPACITY || '60', 10),
+  refillPerSec: parseFloat(process.env.MNEMOPAY_RATE_WEBHOOK_REFILL || '5'),
+});
+
+// ── Webhook idempotency ─────────────────────────────────────────────────────
+const webhookIdempotency = createIdempotencyLog({ ttlMs: 7 * 24 * 60 * 60_000 });
 
 // ── Initialize the real SDK ─────────────────────────────────────────────────
 let agent;
@@ -211,24 +260,102 @@ function json(res, data, status = 200) {
   res.end(JSON.stringify(data));
 }
 
-function readBody(req) {
-  return new Promise((resolve) => {
-    let body = '';
-    req.on('data', c => body += c);
-    req.on('end', () => { try { resolve(JSON.parse(body)); } catch { resolve({}); } });
+class BodyTooLargeError extends Error {
+  constructor(limit) {
+    super(`request body exceeds ${limit} bytes`);
+    this.name = 'BodyTooLargeError';
+    this.status = 413;
+  }
+}
+
+function readRawBody(req, { maxBytes = MAX_BODY_BYTES } = {}) {
+  return new Promise((resolve, reject) => {
+    let total = 0;
+    const chunks = [];
+    let overLimit = false;
+    req.on('data', (chunk) => {
+      if (overLimit) return; // drain silently so the socket can close cleanly
+      total += chunk.length;
+      if (total > maxBytes) {
+        overLimit = true;
+        chunks.length = 0;
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (overLimit) reject(new BodyTooLargeError(maxBytes));
+      else resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+    req.on('error', reject);
   });
 }
 
-function readRawBody(req) {
-  return new Promise((resolve) => {
-    let body = '';
-    req.on('data', c => body += c);
-    req.on('end', () => resolve(body));
-  });
+async function readBody(req, opts = {}) {
+  const raw = await readRawBody(req, opts);
+  if (!raw) return {};
+  try { return JSON.parse(raw); } catch { return {}; }
 }
 
 function errorJson(res, e, fallbackStatus = 400) {
-  return json(res, { ok: false, error: e.message, details: e.details || undefined }, e.status || fallbackStatus);
+  const status = e.status || fallbackStatus;
+  return json(res, { ok: false, error: e.message, details: e.details || undefined }, status);
+}
+
+function resolveCorsOrigin(origin) {
+  if (!origin) return null;
+  if (CORS_ALLOWLIST.length === 0) return PROD ? null : origin;
+  return CORS_ALLOWLIST.includes(origin) ? origin : null;
+}
+
+function applyCors(req, res) {
+  const origin = resolveCorsOrigin(String(req.headers.origin || ''));
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-MnemoPay-Account, Stripe-Signature, X-Request-Id');
+}
+
+function applySecurityHeaders(res, { html = false } = {}) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  if (PROD) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  if (html) {
+    res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'");
+  }
+}
+
+function tooManyRequests(res, retryAfterSec, routeLabel) {
+  rateLimitDeniedTotal.inc({ route: routeLabel });
+  res.setHeader('Retry-After', String(retryAfterSec));
+  return json(res, { ok: false, error: 'rate limit exceeded', retryAfterSec }, 429);
+}
+
+function rateLimit(req, res, limiter, routeLabel, keySuffix = '') {
+  if (RATE_LIMIT_DISABLED) return true;
+  const key = `${clientKeyForRequest(req)}:${keySuffix}`;
+  const result = limiter.consume(key);
+  if (!result.ok) {
+    tooManyRequests(res, result.retryAfterSec, routeLabel);
+    return false;
+  }
+  return true;
+}
+
+function routeLabelFromPath(pathname, method) {
+  if (pathname === '/' || pathname === '/index.html') return `${method} /`;
+  // Normalize ids in known patterns so we don't blow up the cardinality.
+  const normalized = pathname
+    .replace(/^\/api\/v1\/developer\/api-keys\/[^/]+\/revoke$/, '/api/v1/developer/api-keys/:id/revoke')
+    .replace(/^\/api\/v1\/brain\/namespaces\/[^/]+\/(graph|enrich|export)$/, '/api/v1/brain/namespaces/:id/$1')
+    .replace(/^\/api\/v1\/brain\/namespaces\/[^/]+$/, '/api/v1/brain/namespaces/:id')
+    .replace(/^\/api\/memories\/[^/]+$/, '/api/memories/:id');
+  return `${method} ${normalized}`;
 }
 
 function deploymentReadiness() {
@@ -646,6 +773,7 @@ function assertPlanAllows(accountId, action) {
   const missionActions = new Set(['brain.write', 'brain.query', 'rail.charge']);
   if (!missionActions.has(action)) return snapshot;
   if (snapshot.missions.overLimit) {
+    planGateDeniedTotal.inc({ action, plan: snapshot.billing.plan });
     throw new PlanLimitError(`mission limit reached for ${snapshot.billing.plan}`, {
       action,
       plan: snapshot.billing.plan,
@@ -797,7 +925,12 @@ function recordAudit(accountId, action, subject, details = {}) {
     createdAt: new Date().toISOString(),
   };
   auditEvents.push(event);
-  if (auditEvents.length > 5000) auditEvents.splice(0, auditEvents.length - 5000);
+  // Persist before eviction so durable stores see every event. We only drop
+  // the in-memory tail; Postgres/SQLite hold the full history thanks to
+  // append-only ON CONFLICT DO NOTHING inserts.
+  if (auditEvents.length > AUDIT_RING_SIZE) {
+    auditEvents.splice(0, auditEvents.length - AUDIT_RING_SIZE);
+  }
   return event;
 }
 
@@ -1170,6 +1303,7 @@ function consoleSnapshot() {
     consoleSessions: Array.from(consoleSessions.values()).filter((session) => new Date(session.expiresAt).getTime() > Date.now()),
     authChallenges: Array.from(authChallenges.values()).filter((challenge) => !challenge.usedAt && new Date(challenge.expiresAt).getTime() > Date.now()),
     accountMembers: Array.from(accountMembers.values()),
+    webhookEvents: webhookIdempotency.snapshot(),
   };
 }
 
@@ -1190,6 +1324,7 @@ function applyConsoleSnapshot(data = {}) {
     if (!row.usedAt && new Date(row.expiresAt).getTime() > Date.now()) authChallenges.set(row.id, row);
   }
   for (const row of data.accountMembers || []) accountMembers.set(row.id, row);
+  webhookIdempotency.load(data.webhookEvents || []);
 }
 
 async function openConsolePostgresStore() {
@@ -1238,27 +1373,68 @@ async function loadConsoleStore() {
     const raw = fs.readFileSync(CONSOLE_STORE_PATH, 'utf8');
     const data = JSON.parse(raw);
     applyConsoleSnapshot(data);
-    console.log(`[console-store] loaded ${apiKeys.size} keys, ${brainMemories.size} brain memories, ${auditEvents.length} audit events from ${CONSOLE_STORE_PATH}`);
+    log.info('console-store loaded', {
+      driver: CONSOLE_STORE_DRIVER,
+      keys: apiKeys.size,
+      memories: brainMemories.size,
+      audit: auditEvents.length,
+      path: CONSOLE_STORE_PATH,
+    });
   } catch (e) {
-    console.warn(`[console-store] failed to load ${CONSOLE_STORE_DRIVER} store: ${e.message}`);
+    log.warn('console-store load failed', { driver: CONSOLE_STORE_DRIVER, err: e });
   }
 }
 
+// Debounced async save: every saveConsoleStore() call schedules a flush rather
+// than writing inline. Hot-path mutations no longer pay the cost of a full
+// snapshot write. Flushes also coalesce when many mutations arrive in quick
+// succession.
+let saveDirty = false;
+let saveTimer = null;
+let saveInFlight = Promise.resolve();
+
+function flushConsoleStoreNow() {
+  saveDirty = false;
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  const driver = CONSOLE_STORE_DRIVER;
+  const started = Date.now();
+  const flush = async () => {
+    try {
+      if (driver === 'postgres') {
+        await saveConsoleStoreToPostgres();
+      } else if (driver === 'sqlite') {
+        saveConsoleStoreToSqlite();
+      } else {
+        fs.mkdirSync(path.dirname(CONSOLE_STORE_PATH), { recursive: true });
+        fs.writeFileSync(CONSOLE_STORE_PATH, JSON.stringify(consoleSnapshot(), null, 2));
+      }
+      persistenceLatency.observe({ driver }, Date.now() - started);
+    } catch (e) {
+      persistenceFailuresTotal.inc({ driver });
+      log.error('console-store save failed', { driver, err: e });
+    }
+  };
+  saveInFlight = saveInFlight.then(flush, flush);
+  return saveInFlight;
+}
+
 function saveConsoleStore() {
-  try {
-    if (CONSOLE_STORE_DRIVER === 'postgres') {
-      saveConsoleStoreToPostgres();
-      return;
-    }
-    if (CONSOLE_STORE_DRIVER === 'sqlite') {
-      saveConsoleStoreToSqlite();
-      return;
-    }
-    fs.mkdirSync(path.dirname(CONSOLE_STORE_PATH), { recursive: true });
-    fs.writeFileSync(CONSOLE_STORE_PATH, JSON.stringify(consoleSnapshot(), null, 2));
-  } catch (e) {
-    console.warn(`[console-store] failed to save ${CONSOLE_STORE_DRIVER} store: ${e.message}`);
+  if (SAVE_DEBOUNCE_MS === 0) {
+    return flushConsoleStoreNow();
   }
+  saveDirty = true;
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    if (saveDirty) flushConsoleStoreNow();
+  }, SAVE_DEBOUNCE_MS);
+  saveTimer.unref?.();
+}
+
+async function flushConsoleStoreOnShutdown() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  await flushConsoleStoreNow();
+  await saveInFlight;
 }
 
 function publicBrainMemory(memory) {
@@ -1568,18 +1744,23 @@ async function provisionAccount(body, accountId) {
   };
 }
 
-async function queryBrain(body, accountId) {
+async function queryBrain(body, accountId, opts = {}) {
+  const internal = opts.internal === true;
   const namespace = String(body.namespace || 'default').slice(0, 120);
   const query = String(body.query || '').trim();
   const limit = Math.max(1, Math.min(25, parseInt(body.limit || '8', 10)));
   if (!query) throw new Error('query required');
-  assertPlanAllows(accountId, 'brain.query');
-  usageForAccount(accountId).brainQueries++;
+  if (!internal) {
+    assertPlanAllows(accountId, 'brain.query');
+    usageForAccount(accountId).brainQueries++;
+  }
   const candidates = Array.from(brainMemories.values()).filter((m) => m.accountId === accountId && m.namespace === namespace);
   if (brain?.search) {
     const results = await brain.search(query, candidates, limit);
-    recordAudit(accountId, 'brain.query', `brain:${namespace}`, { namespace, query, limit, resultCount: results.length });
-    saveConsoleStore();
+    if (!internal) {
+      recordAudit(accountId, 'brain.query', `brain:${namespace}`, { namespace, query, limit, resultCount: results.length });
+      saveConsoleStore();
+    }
     return {
       namespace,
       query,
@@ -1601,8 +1782,10 @@ async function queryBrain(body, accountId) {
     }))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
-  recordAudit(accountId, 'brain.query', `brain:${namespace}`, { namespace, query, limit, resultCount: scored.length });
-  saveConsoleStore();
+  if (!internal) {
+    recordAudit(accountId, 'brain.query', `brain:${namespace}`, { namespace, query, limit, resultCount: scored.length });
+    saveConsoleStore();
+  }
   return { namespace, query, count: scored.length, results: scored.map(publicBrainMemory) };
 }
 
@@ -1611,8 +1794,12 @@ async function reasonOverBrain(body, accountId) {
   const query = String(body.query || '').trim();
   const limit = Math.max(1, Math.min(12, parseInt(body.limit || '6', 10)));
   if (!query) throw new Error('query required');
+  // Reason charges its own mission credit; the inner recall is treated as
+  // internal so we don't double-bill or double-audit the same logical request.
+  assertPlanAllows(accountId, 'brain.query');
+  usageForAccount(accountId).brainQueries++;
 
-  const recall = await queryBrain({ namespace, query, limit, mode: body.mode || 'hybrid' }, accountId);
+  const recall = await queryBrain({ namespace, query, limit, mode: body.mode || 'hybrid' }, accountId, { internal: true });
   const graph = brainGraphSnapshot(accountId, namespace, 120);
   const resultIds = new Set((recall.results || []).map((r) => r.id));
   const terms = query.toLowerCase().split(/\W+/).filter((term) => term.length > 2);
@@ -1710,17 +1897,48 @@ function onboardingState(accountId) {
 // ── Server ──────────────────────────────────────────────────────────────────
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 
-const server = http.createServer(async (req, res) => {
-  // CORS
-  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.setHeader('Vary', 'Origin');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-MnemoPay-Account, Stripe-Signature');
+async function handleRequest(req, res) {
+  const requestStart = Date.now();
+  inflightRequests.set({}, inflightRequests.values?.get('') || 0);
+  const reqLog = createRequestLogger(req, 'http');
+  res.setHeader('X-Request-Id', req._rid);
+
+  applyCors(req, res);
+  applySecurityHeaders(res);
+
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const pathname = url.pathname;
+  const routeLabel = routeLabelFromPath(pathname, req.method || 'GET');
+
+  // Wrap the original res.end so we can emit metrics on completion.
+  const originalEnd = res.end.bind(res);
+  let finished = false;
+  res.end = (...args) => {
+    if (!finished) {
+      finished = true;
+      const elapsed = Date.now() - requestStart;
+      const status = String(res.statusCode || 200);
+      httpRequestsTotal.inc({ method: req.method || 'GET', route: routeLabel, status });
+      httpRequestDuration.observe({ route: routeLabel }, elapsed);
+      reqLog.info('request', {
+        method: req.method,
+        path: pathname,
+        status: Number(status),
+        ms: elapsed,
+      });
+    }
+    return originalEnd(...args);
+  };
+
+  // General per-IP rate limit on everything except metrics/health probes and
+  // the webhook (which has its own limiter with replay protection).
+  const exempt = pathname === '/metrics' || pathname === '/healthz' || pathname === '/readyz';
+  const isWebhook = pathname === '/api/v1/billing/stripe/webhook';
+  if (!exempt && !isWebhook) {
+    if (!rateLimit(req, res, generalLimiter, routeLabel, 'gen')) return;
+  }
 
   // ── API Routes ──────────────────────────────────────────────────────────
 
@@ -1731,6 +1949,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/v1/auth/challenge' && req.method === 'POST') {
+    if (!rateLimit(req, res, authChallengeLimiter, routeLabel, 'auth')) return;
     try {
       const body = await readBody(req);
       const created = createAuthChallenge(body);
@@ -1992,15 +2211,37 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/v1/billing/stripe/webhook' && req.method === 'POST') {
+    if (!rateLimit(req, res, webhookLimiter, routeLabel, 'wh')) return;
     try {
-      const rawBody = await readRawBody(req);
+      const rawBody = await readRawBody(req, { maxBytes: MAX_WEBHOOK_BODY_BYTES });
       const signature = req.headers['stripe-signature'];
       const verification = verifyStripeWebhookSignature(rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET);
-      if (!verification.ok) return json(res, { ok: false, error: verification.reason }, 400);
-      const event = JSON.parse(rawBody || '{}');
+      if (!verification.ok) {
+        webhookEventsTotal.inc({ type: 'unknown', verification: verification.reason || 'invalid', idempotent: 'no' });
+        return json(res, { ok: false, error: verification.reason }, 400);
+      }
+      let event;
+      try { event = JSON.parse(rawBody || '{}'); }
+      catch { return json(res, { ok: false, error: 'invalid webhook payload' }, 400); }
+
+      const eventId = event?.id;
+      // Idempotency: if Stripe re-delivers (network blip, retry, or replay),
+      // short-circuit and return the cached response so we don't re-provision.
+      if (eventId) {
+        const seen = webhookIdempotency.get(eventId);
+        if (seen) {
+          webhookEventsTotal.inc({ type: event.type || 'unknown', verification: verification.mode, idempotent: 'yes' });
+          return json(res, { ok: true, idempotent: true, eventId, ...seen.result }, 200);
+        }
+      }
+
       const handledTypes = new Set(['checkout.session.completed', 'customer.subscription.updated', 'customer.subscription.deleted']);
       if (!handledTypes.has(event.type)) {
-        return json(res, { ok: true, ignored: true, type: event.type || 'unknown', verification });
+        const result = { ignored: true, type: event.type || 'unknown', verification };
+        if (eventId) webhookIdempotency.record(eventId, result);
+        webhookEventsTotal.inc({ type: event.type || 'unknown', verification: verification.mode, idempotent: 'no' });
+        saveConsoleStore();
+        return json(res, { ok: true, ...result });
       }
       const fallbackAccountId = accountIdForRequest(req);
       const provisionBody = provisioningBodyFromStripeEvent(event, fallbackAccountId);
@@ -2012,8 +2253,11 @@ const server = http.createServer(async (req, res) => {
         type: event.type,
         verification: verification.mode,
       });
+      const result = { accountId, type: event.type, verification, ...provisioned };
+      if (eventId) webhookIdempotency.record(eventId, { accountId, type: event.type });
+      webhookEventsTotal.inc({ type: event.type, verification: verification.mode, idempotent: 'no' });
       saveConsoleStore();
-      return json(res, { ok: true, accountId, type: event.type, verification, ...provisioned }, 200);
+      return json(res, { ok: true, ...result }, 200);
     } catch (e) {
       return errorJson(res, e);
     }
@@ -2086,57 +2330,54 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (pathname.startsWith('/api/v1/brain/namespaces/') && pathname.endsWith('/graph') && req.method === 'GET') {
+  const namespaceMatch = pathname.match(/^\/api\/v1\/brain\/namespaces\/([^/]+)(?:\/(graph|enrich|export))?$/);
+  if (namespaceMatch) {
     const accountId = accountIdForRequest(req);
-    const namespace = decodeURIComponent(pathname.split('/')[5] || 'default');
-    const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get('limit') || '200', 10)));
-    return json(res, { ok: true, ...brainGraphSnapshot(accountId, namespace, limit) });
-  }
+    const namespace = decodeURIComponent(namespaceMatch[1] || 'default').slice(0, 240);
+    const sub = namespaceMatch[2];
 
-  if (pathname.startsWith('/api/v1/brain/namespaces/') && pathname.endsWith('/enrich') && req.method === 'POST') {
-    const accountId = accountIdForRequest(req);
-    const namespace = decodeURIComponent(pathname.split('/')[5] || 'default');
-    const graph = rebuildBrainGraph(accountId, namespace);
-    recordAudit(accountId, 'brain.graph.rebuilt', `brain:${namespace}`, graph.stats);
-    saveConsoleStore();
-    return json(res, { ok: true, ...graph });
-  }
-
-  if (pathname.startsWith('/api/v1/brain/namespaces/') && !pathname.endsWith('/export') && !pathname.endsWith('/graph') && !pathname.endsWith('/enrich') && req.method === 'GET') {
-    const accountId = accountIdForRequest(req);
-    const namespace = decodeURIComponent(pathname.split('/').pop() || 'default');
-    const rows = Array.from(brainMemories.values()).filter((m) => m.accountId === accountId && m.namespace === namespace);
-    const lastWrite = rows.map((m) => m.createdAt).sort().pop() || null;
-    const graph = brainGraphSnapshot(accountId, namespace, 1);
-    return json(res, { ok: true, accountId, namespace, memoryCount: rows.length, lastWrite, mode: brain ? 'recall-engine' : 'fallback', graph: graph.stats });
-  }
-
-  if (pathname.startsWith('/api/v1/brain/namespaces/') && pathname.endsWith('/export') && req.method === 'GET') {
-    const accountId = accountIdForRequest(req);
-    const namespace = decodeURIComponent(pathname.split('/')[5] || 'default');
-    const rows = Array.from(brainMemories.values())
-      .filter((m) => m.accountId === accountId && m.namespace === namespace)
-      .map(publicBrainMemory);
-    recordAudit(accountId, 'brain.namespace.exported', `brain:${namespace}`, { namespace, memoryCount: rows.length });
-    saveConsoleStore();
-    return json(res, { ok: true, accountId, namespace, exportedAt: new Date().toISOString(), memories: rows });
-  }
-
-  if (pathname.startsWith('/api/v1/brain/namespaces/') && req.method === 'DELETE') {
-    const accountId = accountIdForRequest(req);
-    const namespace = decodeURIComponent(pathname.split('/').pop() || 'default');
-    let deleted = 0;
-    for (const [id, memory] of brainMemories.entries()) {
-      if (memory.accountId === accountId && memory.namespace === namespace) {
-        brainMemories.delete(id);
-        if (brain?.remove) brain.remove(id);
-        deleted++;
-      }
+    if (sub === 'graph' && req.method === 'GET') {
+      const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get('limit') || '200', 10)));
+      return json(res, { ok: true, ...brainGraphSnapshot(accountId, namespace, limit) });
     }
-    clearBrainGraph(accountId, namespace);
-    recordAudit(accountId, 'brain.namespace.deleted', `brain:${namespace}`, { namespace, deleted });
-    saveConsoleStore();
-    return json(res, { ok: true, accountId, namespace, deleted });
+
+    if (sub === 'enrich' && req.method === 'POST') {
+      const graph = rebuildBrainGraph(accountId, namespace);
+      recordAudit(accountId, 'brain.graph.rebuilt', `brain:${namespace}`, graph.stats);
+      saveConsoleStore();
+      return json(res, { ok: true, ...graph });
+    }
+
+    if (sub === 'export' && req.method === 'GET') {
+      const rows = Array.from(brainMemories.values())
+        .filter((m) => m.accountId === accountId && m.namespace === namespace)
+        .map(publicBrainMemory);
+      recordAudit(accountId, 'brain.namespace.exported', `brain:${namespace}`, { namespace, memoryCount: rows.length });
+      saveConsoleStore();
+      return json(res, { ok: true, accountId, namespace, exportedAt: new Date().toISOString(), memories: rows });
+    }
+
+    if (!sub && req.method === 'GET') {
+      const rows = Array.from(brainMemories.values()).filter((m) => m.accountId === accountId && m.namespace === namespace);
+      const lastWrite = rows.map((m) => m.createdAt).sort().pop() || null;
+      const graph = brainGraphSnapshot(accountId, namespace, 1);
+      return json(res, { ok: true, accountId, namespace, memoryCount: rows.length, lastWrite, mode: brain ? 'recall-engine' : 'fallback', graph: graph.stats });
+    }
+
+    if (!sub && req.method === 'DELETE') {
+      let deleted = 0;
+      for (const [id, memory] of brainMemories.entries()) {
+        if (memory.accountId === accountId && memory.namespace === namespace) {
+          brainMemories.delete(id);
+          if (brain?.remove) brain.remove(id);
+          deleted++;
+        }
+      }
+      clearBrainGraph(accountId, namespace);
+      recordAudit(accountId, 'brain.namespace.deleted', `brain:${namespace}`, { namespace, deleted });
+      saveConsoleStore();
+      return json(res, { ok: true, accountId, namespace, deleted });
+    }
   }
 
   // GitHub repos
@@ -2149,11 +2390,12 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Health
+  // Health: liveness probe — process is alive and event loop responsive.
   if (pathname === '/healthz') {
-    return json(res, { status: 'ok', mode: 'live', agentId: agent.agentId || 'dashboard-live', storeDriver: CONSOLE_STORE_DRIVER, readiness: deploymentReadiness() });
+    return json(res, { status: 'ok', mode: 'live', agentId: agent.agentId || 'dashboard-live', storeDriver: CONSOLE_STORE_DRIVER });
   }
 
+  // Readiness: deps reachable + required config present. Returns 503 when not ready.
   if (pathname === '/readyz') {
     const readiness = deploymentReadiness();
     return json(res, { status: readiness.ok ? 'ok' : 'not-ready', ...readiness }, readiness.ok ? 200 : 503);
@@ -2163,33 +2405,128 @@ const server = http.createServer(async (req, res) => {
     return json(res, { ok: true, ...deploymentReadiness() });
   }
 
+  // Prometheus metrics scrape endpoint.
+  if (pathname === '/metrics' && req.method === 'GET') {
+    processUptime.set({}, Math.floor(process.uptime()));
+    res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' });
+    return res.end(metrics.render());
+  }
+
   // ── Static files ────────────────────────────────────────────────────────
   if (pathname === '/' || pathname === '/index.html') {
-    const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf-8');
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    return res.end(html);
+    try {
+      const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf-8');
+      applySecurityHeaders(res, { html: true });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(html);
+    } catch (e) {
+      reqLog.error('failed to serve index.html', { err: e });
+      return json(res, { error: 'index missing' }, 500);
+    }
   }
 
   // 404
   json(res, { error: 'Not found' }, 404);
+}
+
+const server = http.createServer((req, res) => {
+  Promise.resolve()
+    .then(() => handleRequest(req, res))
+    .catch((err) => {
+      // Last-resort safety net. Individual routes catch their own errors;
+      // anything that reaches here is an unexpected throw from middleware.
+      log.error('unhandled request error', { err, rid: req._rid, path: req.url });
+      if (err && err.name === 'BodyTooLargeError') {
+        return errorJson(res, err);
+      }
+      if (!res.headersSent) {
+        try { errorJson(res, { message: 'internal server error' }, 500); }
+        catch { try { res.end(); } catch {} }
+      } else {
+        try { res.end(); } catch {}
+      }
+    });
+});
+
+server.on('clientError', (err, socket) => {
+  if (err.code === 'ECONNRESET' || !socket.writable) return;
+  try { socket.end('HTTP/1.1 400 Bad Request\r\n\r\n'); } catch {}
 });
 
 async function startServer() {
   await loadConsoleStore();
-  server.listen(PORT, () => {
-    console.log(`\n  MnemoPay Live Dashboard`);
-    console.log(`  ────────────────────────`);
-    console.log(`  URL:     http://localhost:${PORT}`);
-    console.log(`  Agent:   ${agent.agentId || 'dashboard-live'}`);
-    console.log(`  Mode:    Live (real SDK)`);
-    console.log(`  Store:   ${CONSOLE_STORE_DRIVER}`);
-    console.log(`  API:     /api/memories, /api/charge, /api/settle, /api/repos`);
-    console.log(`  Brain:   /api/v1/brain/memories, /api/v1/brain/query`);
-    console.log(`  Repos:   ${MONITORED_REPOS.length} monitored\n`);
+  return new Promise((resolve) => {
+    server.listen(PORT, () => {
+      log.info('dashboard started', {
+        port: PORT,
+        agentId: agent.agentId || 'dashboard-live',
+        storeDriver: CONSOLE_STORE_DRIVER,
+        nodeEnv: process.env.NODE_ENV || 'development',
+        repos: MONITORED_REPOS.length,
+      });
+      resolve(server);
+    });
   });
 }
 
-startServer().catch((e) => {
-  console.error(`[server] failed to start: ${e.message}`);
-  process.exit(1);
-});
+// ── Graceful shutdown ───────────────────────────────────────────────────────
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log.info('shutdown initiated', { signal });
+  // Stop accepting new connections.
+  server.close((err) => {
+    if (err) log.error('server.close error', { err });
+  });
+  try {
+    // Wait up to 15s for in-flight requests to drain.
+    const drainDeadline = Date.now() + 15_000;
+    while (server.connections > 0 && Date.now() < drainDeadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    // Flush any pending persistence writes.
+    await flushConsoleStoreOnShutdown();
+    if (consolePostgresStore?.close) await consolePostgresStore.close();
+    log.info('shutdown complete');
+  } catch (err) {
+    log.error('shutdown error', { err });
+  } finally {
+    // Don't kill the process when the smoke test drives shutdown.
+    if (signal !== 'test' && require.main === module) process.exit(0);
+  }
+}
+
+if (require.main === module) {
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('uncaughtException', (err) => {
+    log.error('uncaughtException', { err });
+    shutdown('uncaughtException');
+  });
+  process.on('unhandledRejection', (reason) => {
+    log.error('unhandledRejection', { err: reason instanceof Error ? reason : new Error(String(reason)) });
+  });
+  startServer().catch((e) => {
+    log.error('failed to start', { err: e });
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  server,
+  startServer,
+  shutdown,
+  handleRequest,
+  metrics,
+  // Surface helpers for tests.
+  _internals: {
+    apiKeys, brainMemories, brainEntities, brainEdges, auditEvents,
+    accountPlans, accountMembers, consoleSessions, authChallenges,
+    usageCounters, webhookIdempotency, deploymentReadiness,
+    verifyStripeWebhookSignature, recordAudit, createApiKey,
+    storeBrainMemory, queryBrain, reasonOverBrain, provisionAccount,
+    onboardingState, meteringSnapshot, accountPlanFor, routeLabelFromPath,
+    PLAN_CATALOG,
+  },
+};

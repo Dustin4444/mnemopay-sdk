@@ -1,12 +1,14 @@
 {
   "name": "mnemopay-dashboard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "commonjs",
   "description": "Hosted MnemoPay console/dashboard",
   "scripts": {
     "start": "node server.js",
-    "test": "node auth-email.test.cjs && node console-postgres-store.test.cjs && node stripe-billing.test.cjs"
+    "test:unit": "node auth-email.test.cjs && node console-postgres-store.test.cjs && node stripe-billing.test.cjs && node logger.test.cjs && node rate-limit.test.cjs && node metrics.test.cjs && node idempotency.test.cjs",
+    "test:smoke": "node server.smoke.test.cjs",
+    "test": "npm run test:unit && npm run test:smoke"
   },
   "dependencies": {
     "pg": "^8.16.3"
