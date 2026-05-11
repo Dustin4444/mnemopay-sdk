@@ -4,6 +4,105 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [1.6.0] — 2026-05-11
+
+Promotes the `1.6.0-alpha.{0,1,2}` line on the `alpha` dist-tag to a stable
+release on `latest`. Rolls up four experimental rails and one auto-start
+hardening fix into a single backward-compatible minor.
+
+```bash
+npm install @mnemopay/sdk          # now resolves to 1.6.0
+```
+
+### Added (stable)
+
+- **`StripeMPPRail`** — Stripe Machine Payments Protocol rail, agent payments
+  routed as crypto deposits on the Tempo network via Stripe's MPP-enabled
+  PaymentIntents API. Pinned to `apiVersion: '2026-03-04.preview'`. Drop-in
+  swap for `StripeRail`. (originally shipped in `1.6.0-alpha.0`)
+- **`X402Rail`** — Coinbase x402 protocol rail (HTTP 402 revival). USDC on
+  Base L2 via EIP-3009 `transferWithAuthorization` — agents sign off-chain,
+  facilitator submits to chain on capture. Pluggable `X402Signer`, zero
+  crypto deps in the SDK. (originally shipped in `1.6.0-alpha.1`)
+- **`GoogleAP2Rail`** — Google Agent Payment Protocol (FIDO Alliance open
+  standard, AP2 v0.2 — Human Not Present). Mandate VC + Intent VC + HTTP
+  settlement. Pre-flight policy enforcement: mandate expiry, per-tx cap,
+  rolling aggregate cap, currency match, recipient allow-list, credential
+  match. Defense-in-depth. (originally shipped in `1.6.0-alpha.1`)
+- **Spatial governance fold** (`src/governance/spatial.ts`) — GridStamp
+  evidence adapter for embodied agents. `attachSpatialEvidence`,
+  `verifySpatialEvidence`, `fingerprintSpatialEvidence` over a discriminated
+  union of `GridStampSpatialProof` + `GridStampSplatEvidence`. Loose-coupled
+  — no runtime dep on the `gridstamp` package. Article 12 bundle wiring
+  emits `spatial.evidence` events in `events.json` + `events.csv`
+  automatically. (originally shipped in `1.6.0-alpha.0`)
+
+### Fixed
+
+- **MCP server auto-start guard** — `src/mcp/server.ts` replaced the loose
+  `process.argv[1]?.includes("mcp") || process.argv.includes("--start")`
+  heuristic with the canonical CommonJS `require.main === module` check.
+  The previous heuristic could false-fire when consumers imported
+  `@mnemopay/sdk/mcp` from a process whose argv happened to contain the
+  string `"mcp"` (e.g. browser bundlers, test runners under certain
+  invocations). Confirmed in the wild by the `@blackpig/forge` browser
+  consumer. Originally shipped in `1.6.0-alpha.2`.
+
+### Public API additions in `src/index.ts` (since 1.5.0, additive only)
+
+- `StripeMPPRail`, `X402Rail`, `GoogleAP2Rail`, `validateMandate`
+- `attachSpatialEvidence`, `verifySpatialEvidence`, `fingerprintSpatialEvidence`
+- `BASE_MAINNET_CHAIN_ID`, `BASE_SEPOLIA_CHAIN_ID`, `ETH_MAINNET_CHAIN_ID`,
+  `USDC_CONTRACTS`, `USDC_DECIMALS`
+- type exports: `StripeMPPOptions`, `X402Options`, `X402Signer`,
+  `X402AuthorizationPayload`, `TransferWithAuthorizationTypedData`,
+  `AP2Mandate`, `AP2Intent`, `AP2Signer`, `AP2Options`,
+  `AP2SettlementResponse`, `AP2MandateValidation`, `SpatialEvidence`,
+  `SpatialEvidenceVerifyResult`, `SpatialEvidenceRejectReason`,
+  `GridStampSpatialProof`, `GridStampSplatEvidence`
+
+### Compatibility
+
+- Fully backward compatible with v1.5.0. No existing export was modified or
+  removed; consumers on `latest` see only new symbols.
+- `StripeMPPRail` requires `stripe@>=14.0.0` (already a peer dep) and an
+  MPP-enabled Stripe account; falls back to `StripeRail` otherwise.
+- `X402Rail` ships with zero crypto deps — consumers wire their own
+  `X402Signer` (`viem` / `ethers` / `@noble/secp256k1`).
+- `GoogleAP2Rail` ships with zero deps — consumers wire `AP2Signer` and
+  the merchant AP2 settlement endpoint.
+- Spatial fold is loose-coupled — works with or without `gridstamp`.
+
+### Sister releases
+
+- **`mnemopay@1.0.0`** (PyPI) — Python rail port at stable parity. Mirrors
+  the TypeScript `PaymentRail` interface (sync API). Ships `MockRail` +
+  `StripeRail`. The `1.0.0b1..b4` betas are superseded; `pip install mnemopay`
+  now resolves to `1.0.0`.
+- Hosted **MnemoPay console** at https://mnemopay-landing.fly.dev/ — Tier 1
+  production blockers, Tier 2 observability, Tier 3 safety nets all in
+  place (rate limiting, body-size caps, idempotent webhooks, structured
+  JSON logging, Prometheus `/metrics`, graceful shutdown, CORS allowlist,
+  security headers + tight CSP). `/readyz` returns `productionReady: true`.
+
+## [1.6.0-alpha.2] — 2026-05-10
+
+Third pre-release on the `alpha` dist-tag. One-line hardening fix folded in
+from `224bec70` (2026-05-10).
+
+### Fixed
+
+- **MCP server auto-start guard** — switched from the loose `process.argv`
+  heuristic to `require.main === module` in `src/mcp/server.ts`. Prevents
+  spurious server starts when consumers `import` from `@mnemopay/sdk/mcp`
+  in browser bundles or test harnesses. Surfaced by the
+  `@blackpig/forge` browser consumer dogfooding `@mnemopay/sdk/recall`.
+
+### Compatibility
+
+- No public API change. Direct CLI invocation (`mnemopay-mcp`) still starts
+  the server; library imports no longer can.
+
 ## [1.6.0-alpha.1] — 2026-05-08
 
 Second pre-release on the `alpha` dist-tag. Adds the next two v1.6.x

@@ -11,5 +11,6 @@ export default defineConfig({
         execArgv: ["--expose-gc"],
       },
     },
+    include: ["**/*.test.ts"],
   },
 });
