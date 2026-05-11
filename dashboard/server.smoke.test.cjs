@@ -146,6 +146,14 @@ async function main() {
     }
     assert(limitedSeen, 'expected rate limiter to deny within 6 attempts');
 
+    // ── Provision acct_smoke to team plan so brain ops aren't capped at 5. ─
+    const provision = await request('POST', '/api/v1/billing/provision', {
+      body: { plan: 'team', interval: 'monthly', createApiKey: false },
+      headers: { 'x-mnemopay-account': 'acct_smoke' },
+    });
+    assert.strictEqual(provision.status, 201);
+    assert.strictEqual(provision.body.account.plan, 'team');
+
     // ── Body size limit ───────────────────────────────────────────────────
     const big = await request('POST', '/api/v1/brain/memories', {
       body: { content: 'x'.repeat(5000), namespace: 'big' },
@@ -232,6 +240,40 @@ async function main() {
     });
     assert.strictEqual(usageReport.status, 200);
     assert(usageReport.body.missions);
+
+    // ── Brain capabilities surface ───────────────────────────────────────
+    const caps = await request('GET', '/api/v1/brain/capabilities');
+    assert.strictEqual(caps.status, 200);
+    assert(['recall-engine', 'fallback'].includes(caps.body.mode));
+    // These should be booleans whether or not they are wired in this env.
+    for (const key of ['llmReasoning', 'hydeExpansion', 'reranker', 'entityGraph', 'llmEntityExtraction']) {
+      assert.strictEqual(typeof caps.body[key], 'boolean', `${key} should be boolean`);
+    }
+
+    // ── Brain reason returns deterministic trace when no LLM key set ─────
+    const reasonNoLLM = await request('POST', '/api/v1/brain/reason', {
+      body: { query: 'mnemopay', namespace: 'default', llm: true },
+      headers: { 'x-mnemopay-account': 'acct_smoke' },
+    });
+    assert.strictEqual(reasonNoLLM.status, 200);
+    // llmReasoning is null when reasoner is not configured.
+    assert(reasonNoLLM.body.llmReasoning === null || typeof reasonNoLLM.body.llmReasoning === 'object');
+
+    // ── HyDE/rerank opt-ins don't break query when underlying not wired ─
+    const qExpanded = await request('POST', '/api/v1/brain/query', {
+      body: { query: 'mnemopay', namespace: 'default', limit: 3, expansion: 'hyde', rerank: true },
+      headers: { 'x-mnemopay-account': 'acct_smoke' },
+    });
+    assert.strictEqual(qExpanded.status, 200);
+    assert(typeof qExpanded.body.count === 'number');
+
+    // ── Summarize endpoint returns 503 when no LLM key configured ────────
+    const summarize = await request('POST', '/api/v1/brain/summarize', {
+      body: { sessionId: 'sess_test', turns: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }] },
+      headers: { 'x-mnemopay-account': 'acct_smoke' },
+    });
+    // Either 201 (key configured) or 503 (no key). Both are acceptable.
+    assert([201, 503].includes(summarize.status), `summarize status: ${summarize.status}`);
 
     // ── Metrics endpoint ─────────────────────────────────────────────────
     const m = await request('GET', '/metrics', {}, { raw: true });

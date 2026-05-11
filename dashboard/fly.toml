@@ -8,19 +8,27 @@ primary_region = 'dfw'
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [[http_service.checks]]
     interval = '15s'
-    timeout = '2s'
-    grace_period = '10s'
+    timeout = '3s'
+    grace_period = '20s'
     method = 'GET'
     path = '/readyz'
 
 [env]
-  MNEMOPAY_CONSOLE_STORE_DRIVER = 'postgres'
+  # SQLite + Fly volume for v1. Migrate to MNEMOPAY_CONSOLE_STORE_DRIVER=postgres
+  # once Neon is provisioned and MNEMOPAY_CONSOLE_POSTGRES_URL is set.
+  MNEMOPAY_CONSOLE_STORE_DRIVER = 'sqlite'
+  MNEMOPAY_CONSOLE_SQLITE = '/data/console-store.sqlite'
   NODE_ENV = 'production'
+  MNEMOPAY_LOG_LEVEL = 'info'
+
+[[mounts]]
+  source = 'mnemopay_console_data'
+  destination = '/data'
 
 [[vm]]
   size = 'shared-cpu-1x'
-  memory = '256mb'
+  memory = '512mb'

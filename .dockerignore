@@ -1,0 +1,23 @@
+# Build context root. Used by `fly deploy --config dashboard/fly.toml
+# --dockerfile dashboard/Dockerfile` which runs from the project root.
+
+node_modules
+**/node_modules
+.git
+.env
+.env.*
+**/.env
+**/.env.*
+*.log
+benchmark/longmemeval/longmemeval-repo
+docs
+ops
+marketing
+site
+journal
+.claude
+.husky
+.smithery
+.vercel
+tmp-*
+dashboard/.mnemopay-console

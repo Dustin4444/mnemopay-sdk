@@ -1,4 +1,39 @@
-﻿# mnemopay-sdk status - 2026-05-10 21:10 Claude
+﻿# mnemopay-sdk status - 2026-05-11 Claude (Forge consumer dogfood)
+
+## First in-engine consumer of `@mnemopay/sdk/recall` — Forge persona memory
+
+Wired `@mnemopay/sdk/recall` (`localEmbed` + `cosineSimilarity`) into `@blackpig/forge` as the persona memory backend. This is the **first real-world browser-runtime consumer** of the recall primitives — the brain repo dogfoods them in Bun/Node, but Forge is the first browser bundle.
+
+- `packages/forge/src/ai/memory/brain.ts` — `createInProcessBrain()` is a concrete `MnemoPayClientLike`. Per-namespace cosine recall, `onPersist` hook, `snapshot()`/`initial:` rehydration, `forget()`.
+- `packages/forge/src/ai/memory/recorder.ts` — auto-pipes ObservationBus events into the memory adapter.
+- `examples/smoke-game/` — NPC Maya remembers across full page reloads via localStorage. 96/96 forge tests green (was 91; +7 brain + +5 primitive winding).
+- SDK pinned at `1.6.0-alpha.2` (the version with the MCP startup-guard fix).
+
+### New operational rule for SDK consumers in browser bundles (Vite/Rollup)
+
+Alias the SDK's Node-only optional deps to an empty stub or the bundler eagerly tries to resolve `pg` inside `dist/recall/persistence/neon.js`:
+
+```ts
+resolve: {
+  alias: {
+    pg: emptyModule,
+    "better-sqlite3": emptyModule,
+    "@xenova/transformers": emptyModule,  // drops ~820KB
+    "onnxruntime-web": emptyModule,
+  },
+},
+optimizeDeps: {
+  exclude: ["pg", "better-sqlite3", "@xenova/transformers", "onnxruntime-web"],
+},
+```
+
+Bundle dropped from 820KB → 57KB / 21KB gzipped for the smoke-game. **SDK maintainers' real fix:** mark these as `peerDependenciesMeta: { optional: true }` properly, or split the recall engine entry point so `dist/recall/engine.js` doesn't statically pull in the persistence adapters. Subpath users would then get a leaner module.
+
+Full record: `~/.claude/projects/C--WINDOWS-system32/memory/project_forge_game_ready_push_2026_05_11.md`.
+
+---
+
+# mnemopay-sdk status - 2026-05-10 21:10 Claude
 
 ## Dashboard hardened to production grade
 

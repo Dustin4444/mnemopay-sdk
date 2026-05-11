@@ -79,6 +79,11 @@ const webhookIdempotency = createIdempotencyLog({ ttlMs: 7 * 24 * 60 * 60_000 })
 // ── Initialize the real SDK ─────────────────────────────────────────────────
 let agent;
 let brain;
+let reasoner; // ReasoningPostProcessor — real LLM reasoning
+let hyde;     // HyDEGenerator — query expansion
+let reranker; // CrossEncoderReranker — post-recall rerank
+let entityGraph; // SDK EntityGraph (typed edges, bitemporal, spreading activation)
+let extractEntitiesFn; // LLM-backed entity extraction with deterministic fallback
 const brainMemories = new Map();
 const brainEntities = new Map();
 const brainEdges = new Map();
@@ -89,22 +94,89 @@ const consoleSessions = new Map();
 const accountMembers = new Map();
 const authChallenges = new Map();
 const auditEvents = [];
+
+function tryRequireSDK() {
+  // Production path: SDK installed via npm as @mnemopay/sdk (Dockerfile vendors
+  // the locally-built dist into node_modules and strips the ESM-only exports
+  // field so CJS require() works).
+  // Dev path: fall back to local ../dist/index.js when running outside a build.
+  const attempts = [
+    () => {
+      const main = require('@mnemopay/sdk');
+      // main re-exports RecallEngine from /recall, so we can just reuse it.
+      return { main, recall: { RecallEngine: main.RecallEngine }, source: '@mnemopay/sdk' };
+    },
+    () => ({
+      main: require('../dist/index.js'),
+      recall: require('../dist/recall/engine.js'),
+      source: '../dist',
+    }),
+  ];
+  let lastErr;
+  for (const attempt of attempts) {
+    try { return attempt(); } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
 try {
-  const SDK = require('../dist/index.js');
-  agent = SDK.MnemoPay.quick(process.env.MNEMOPAY_AGENT_ID || 'dashboard-live');
-  const RecallEngine = SDK.RecallEngine || SDK.recall?.RecallEngine;
+  const SDK = tryRequireSDK();
+  agent = SDK.main.MnemoPay.quick(process.env.MNEMOPAY_AGENT_ID || 'dashboard-live');
+  const RecallEngine = SDK.recall.RecallEngine || SDK.main.RecallEngine;
   if (RecallEngine) {
     brain = new RecallEngine({
       strategy: process.env.MNEMOPAY_BRAIN_STRATEGY || 'hybrid',
       embeddingProvider: process.env.MNEMOPAY_BRAIN_EMBEDDING || 'local',
       agentId: BRAIN_AGENT_ID,
+      openaiApiKey: process.env.OPENAI_API_KEY,
     });
   }
-  console.log('[sdk] MnemoPayLite initialized (live mode)');
+  // Optional: real LLM reasoning. Off unless an API key is set.
+  // Provider precedence:
+  //   1. MNEMOPAY_REASONING_PROVIDER explicit override (anthropic|openai)
+  //   2. ANTHROPIC_API_KEY → anthropic
+  //   3. OPENAI_API_KEY → openai
+  const providerOverride = (process.env.MNEMOPAY_REASONING_PROVIDER || '').toLowerCase();
+  const llmProvider = providerOverride === 'anthropic' || providerOverride === 'openai'
+    ? providerOverride
+    : (process.env.ANTHROPIC_API_KEY ? 'anthropic' : (process.env.OPENAI_API_KEY ? 'openai' : null));
+  const llmKey = llmProvider === 'anthropic' ? process.env.ANTHROPIC_API_KEY
+    : llmProvider === 'openai' ? process.env.OPENAI_API_KEY
+    : null;
+  const ReasoningPostProcessor = SDK.main.ReasoningPostProcessor;
+  if (ReasoningPostProcessor && llmKey) {
+    reasoner = new ReasoningPostProcessor({
+      provider: llmProvider,
+      apiKey: llmKey,
+      model: process.env.MNEMOPAY_REASONING_MODEL,
+      maxTokens: parseInt(process.env.MNEMOPAY_REASONING_MAX_TOKENS || '1024', 10),
+      includeChainOfThought: process.env.MNEMOPAY_REASONING_COT === 'true',
+    });
+  }
+  // Optional: HyDE query expansion. Off unless an API key is set.
+  const HyDEGenerator = SDK.main.HyDEGenerator;
+  if (HyDEGenerator && llmKey) {
+    hyde = new HyDEGenerator({
+      provider: llmProvider,
+      apiKey: llmKey,
+      model: process.env.MNEMOPAY_HYDE_MODEL,
+      numHypotheses: parseInt(process.env.MNEMOPAY_HYDE_HYPOTHESES || '3', 10),
+    });
+  }
+  // Optional: cross-encoder reranker. Lazy-loads its model on first use.
+  const CrossEncoderReranker = SDK.main.CrossEncoderReranker;
+  if (CrossEncoderReranker && process.env.MNEMOPAY_RERANKER_ENABLED === 'true') {
+    reranker = new CrossEncoderReranker({
+      model: process.env.MNEMOPAY_RERANKER_MODEL,
+      maxCandidates: parseInt(process.env.MNEMOPAY_RERANKER_MAX_CANDIDATES || '50', 10),
+    });
+  }
+  if (SDK.main.EntityGraph) entityGraph = new SDK.main.EntityGraph();
+  if (SDK.main.extractEntities) extractEntitiesFn = SDK.main.extractEntities;
+  console.log(`[sdk] initialized from ${SDK.source} (reasoner=${!!reasoner}, hyde=${!!hyde}, reranker=${!!reranker})`);
 } catch (e) {
   console.error('[sdk] Failed to load SDK:', e.message);
   console.log('[sdk] Falling back to inline implementation');
-  // Minimal fallback if dist isn't built
   agent = createFallbackAgent();
 }
 
@@ -365,8 +437,13 @@ function deploymentReadiness() {
   };
   const defaultSecret = SESSION_SECRET === 'mnemopay-console-dev-secret';
   add('session-secret', !defaultSecret, defaultSecret ? 'Set MNEMOPAY_SESSION_SECRET or MNEMOPAY_SECRET.' : 'Session secret configured.');
-  add('store-driver', CONSOLE_STORE_DRIVER === 'postgres', `Store driver is ${CONSOLE_STORE_DRIVER}.`, process.env.NODE_ENV === 'production' ? 'required' : 'recommended');
+  // Both sqlite (with persistent Fly volume) and postgres (Neon/RDS) are
+  // valid production stores. JSON is dev-only.
+  const isProd = process.env.NODE_ENV === 'production';
+  const validProdDriver = CONSOLE_STORE_DRIVER === 'postgres' || CONSOLE_STORE_DRIVER === 'sqlite';
+  add('store-driver', validProdDriver || !isProd, `Store driver is ${CONSOLE_STORE_DRIVER}.`, isProd ? 'required' : 'recommended');
   add('postgres-url', CONSOLE_STORE_DRIVER !== 'postgres' || !!CONSOLE_POSTGRES_URL, 'Postgres/Neon URL required when using postgres store.');
+  add('sqlite-path', CONSOLE_STORE_DRIVER !== 'sqlite' || !!CONSOLE_SQLITE_PATH, 'SQLite path required when using sqlite store.');
   add('stripe-secret', !!process.env.STRIPE_SECRET_KEY, process.env.STRIPE_SECRET_KEY ? 'Stripe secret configured.' : 'Set STRIPE_SECRET_KEY for checkout sessions.', 'recommended');
   add('stripe-webhook-secret', !!process.env.STRIPE_WEBHOOK_SECRET, process.env.STRIPE_WEBHOOK_SECRET ? 'Stripe webhook secret configured.' : 'Set STRIPE_WEBHOOK_SECRET before live webhooks.', 'recommended');
   add('resend-key', !!process.env.RESEND_API_KEY, process.env.RESEND_API_KEY ? 'Resend API key configured.' : 'Set RESEND_API_KEY for passwordless email delivery.', 'recommended');
@@ -1749,44 +1826,97 @@ async function queryBrain(body, accountId, opts = {}) {
   const namespace = String(body.namespace || 'default').slice(0, 120);
   const query = String(body.query || '').trim();
   const limit = Math.max(1, Math.min(25, parseInt(body.limit || '8', 10)));
+  const expansion = String(body.expansion || '').toLowerCase(); // 'hyde' | ''
+  const wantRerank = body.rerank === true;
   if (!query) throw new Error('query required');
   if (!internal) {
     assertPlanAllows(accountId, 'brain.query');
     usageForAccount(accountId).brainQueries++;
   }
   const candidates = Array.from(brainMemories.values()).filter((m) => m.accountId === accountId && m.namespace === namespace);
-  if (brain?.search) {
-    const results = await brain.search(query, candidates, limit);
-    if (!internal) {
-      recordAudit(accountId, 'brain.query', `brain:${namespace}`, { namespace, query, limit, resultCount: results.length });
-      saveConsoleStore();
+
+  // Optional query expansion via HyDE — generate hypothetical answers and use
+  // them as extra retrieval queries. Off by default; opt-in per request.
+  const queryVariants = [query];
+  let hydeApplied = false;
+  if (expansion === 'hyde' && hyde) {
+    try {
+      const expansionResult = await hyde.generate(query);
+      const hypotheses = (expansionResult?.hypotheses || []).slice(0, 3);
+      queryVariants.push(...hypotheses);
+      hydeApplied = hypotheses.length > 0;
+    } catch (e) {
+      log.warn('hyde expansion failed', { err: e });
     }
-    return {
-      namespace,
-      query,
-      count: results.length,
-      results: results.map((r) => ({
-        id: r.id,
-        content: r.content,
-        importance: r.importance,
-        score: r.combinedScore ?? r.score,
-        tags: r.tags,
-      })),
-    };
   }
-  const terms = query.toLowerCase().split(/\W+/).filter(Boolean);
-  const scored = candidates
-    .map((m) => ({
-      ...m,
-      score: terms.reduce((sum, term) => sum + (m.content.toLowerCase().includes(term) ? 1 : 0), 0) + m.importance,
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+
+  // Run recall over each query variant and merge.
+  const mergedById = new Map();
+  if (brain?.search) {
+    for (const q of queryVariants) {
+      const results = await brain.search(q, candidates, limit);
+      for (const r of results) {
+        const existing = mergedById.get(r.id);
+        const score = r.combinedScore ?? r.score ?? 0;
+        if (!existing || score > existing.score) {
+          mergedById.set(r.id, { ...r, score });
+        }
+      }
+    }
+  } else {
+    const terms = queryVariants.join(' ').toLowerCase().split(/\W+/).filter(Boolean);
+    for (const m of candidates) {
+      const score = terms.reduce((sum, term) => sum + (m.content.toLowerCase().includes(term) ? 1 : 0), 0) + m.importance;
+      mergedById.set(m.id, { ...m, score });
+    }
+  }
+
+  let merged = Array.from(mergedById.values()).sort((a, b) => b.score - a.score);
+
+  // Optional cross-encoder rerank on top-k candidates.
+  let rerankApplied = false;
+  if (wantRerank && reranker && merged.length > 1) {
+    try {
+      const top = merged.slice(0, Math.min(50, merged.length));
+      const reranked = await reranker.rerank(
+        query,
+        top.map((m) => ({ id: m.id, content: m.content, priorScore: m.score, timestamp: m.createdAt instanceof Date ? m.createdAt : new Date(m.createdAt) })),
+        limit,
+      );
+      const ordered = reranked
+        .map((r) => merged.find((m) => m.id === r.item.id))
+        .filter(Boolean)
+        .map((m, i) => ({ ...m, score: 1 / (i + 1) })); // normalize to rank-based
+      merged = ordered;
+      rerankApplied = true;
+    } catch (e) {
+      log.warn('reranker failed', { err: e });
+    }
+  }
+
+  const finalResults = merged.slice(0, limit);
   if (!internal) {
-    recordAudit(accountId, 'brain.query', `brain:${namespace}`, { namespace, query, limit, resultCount: scored.length });
+    recordAudit(accountId, 'brain.query', `brain:${namespace}`, {
+      namespace, query, limit,
+      resultCount: finalResults.length,
+      hydeApplied, rerankApplied,
+    });
     saveConsoleStore();
   }
-  return { namespace, query, count: scored.length, results: scored.map(publicBrainMemory) };
+  return {
+    namespace,
+    query,
+    count: finalResults.length,
+    expansion: hydeApplied ? 'hyde' : null,
+    rerank: rerankApplied,
+    results: finalResults.map((r) => ({
+      id: r.id,
+      content: r.content,
+      importance: r.importance,
+      score: r.score,
+      tags: r.tags,
+    })),
+  };
 }
 
 async function reasonOverBrain(body, accountId) {
@@ -1820,26 +1950,62 @@ async function reasonOverBrain(body, accountId) {
     content: result.content,
     tags: result.tags || [],
   }));
+
+  // Optional: real LLM reasoning when ReasoningPostProcessor is configured.
+  // Off otherwise (deterministic trace). Opt-in via `body.llm === true`.
+  let llmReasoning = null;
+  const useLLM = body.llm === true && !!reasoner;
+  if (useLLM) {
+    try {
+      const memories = (recall.results || []).map((r) => ({
+        id: r.id,
+        content: r.content,
+        importance: r.importance,
+        score: r.score,
+        createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),
+        lastAccessed: r.lastAccessed ? new Date(r.lastAccessed) : new Date(),
+        accessCount: r.accessCount || 0,
+        tags: r.tags || [],
+      }));
+      const reasoningResult = await reasoner.reason(query, memories);
+      llmReasoning = {
+        facts: reasoningResult.facts || [],
+        rankedIds: reasoningResult.rankedIds || [],
+        reasoning: reasoningResult.reasoning || null,
+        durationMs: reasoningResult.durationMs || 0,
+      };
+    } catch (e) {
+      log.error('reasoner failed', { err: e, query, namespace, model: process.env.MNEMOPAY_REASONING_MODEL });
+      llmReasoning = { error: e.message };
+    }
+  }
+
   const confidence = Math.max(0, Math.min(1, (evidence.length / Math.max(1, limit)) * 0.7 + (entities.length > 0 ? 0.2 : 0) + (edges.length > 0 ? 0.1 : 0)));
-  const answer = evidence.length
+  const baseAnswer = evidence.length
     ? `Found ${evidence.length} relevant memories in ${namespace}. The strongest signals mention ${entities.slice(0, 4).map((e) => e.name).join(', ') || 'matching terms'} and connect through ${edges.length} graph edge${edges.length === 1 ? '' : 's'}.`
     : `No strong evidence found in ${namespace} for this query.`;
+  const answer = llmReasoning && llmReasoning.facts.length
+    ? `${llmReasoning.facts.length} fact${llmReasoning.facts.length === 1 ? '' : 's'} extracted from ${evidence.length} memories: ${llmReasoning.facts.slice(0, 2).join('; ')}${llmReasoning.facts.length > 2 ? '…' : ''}`
+    : baseAnswer;
+
   const trace = {
     query,
     namespace,
     generatedAt: new Date().toISOString(),
-    mode: body.mode || 'hybrid',
+    mode: useLLM ? 'llm' : (body.mode || 'hybrid'),
     confidence: Number(confidence.toFixed(2)),
     steps: [
       { name: 'scope', detail: `Searched namespace ${namespace}.` },
       { name: 'recall', detail: `Ranked ${recall.count || 0} memories with limit ${limit}.` },
       { name: 'graph', detail: `Loaded ${graph.stats.entities} entities and ${graph.stats.edges} edges.` },
       { name: 'evidence', detail: `Selected ${evidence.length} memories, ${entities.length} entities, and ${edges.length} edges for the trace.` },
+      ...(useLLM ? [{ name: 'llm', detail: llmReasoning ? `LLM extracted ${llmReasoning.facts.length} facts in ${llmReasoning.durationMs}ms.` : 'LLM reasoning unavailable; deterministic trace returned.' }] : []),
     ],
     answer,
     evidence,
     entities,
     edges,
+    llmReasoning,
   };
   recordAudit(accountId, 'brain.reasoning.trace', `brain:${namespace}`, {
     namespace,
@@ -1848,6 +2014,7 @@ async function reasonOverBrain(body, accountId) {
     entityCount: entities.length,
     edgeCount: edges.length,
     confidence: trace.confidence,
+    llm: useLLM && !!llmReasoning,
   });
   saveConsoleStore();
   return trace;
@@ -2403,6 +2570,55 @@ async function handleRequest(req, res) {
 
   if (pathname === '/api/v1/ops/readiness' && req.method === 'GET') {
     return json(res, { ok: true, ...deploymentReadiness() });
+  }
+
+  // Summarize a conversation session into a dated factual digest, then store
+  // it as a memory in the target namespace. Requires Groq or Anthropic key.
+  if (pathname === '/api/v1/brain/summarize' && req.method === 'POST') {
+    try {
+      const accountId = accountIdForRequest(req);
+      const body = await readBody(req);
+      const sdkMain = (() => { try { return require('@mnemopay/sdk'); } catch { try { return require('../dist/index.js'); } catch { return null; } } })();
+      if (!sdkMain?.summarizeSession) return errorJson(res, new Error('summarizer unavailable'), 503);
+      const groqKey = process.env.GROQ_API_KEY;
+      const anthropicKey = process.env.ANTHROPIC_API_KEY;
+      if (!groqKey && !anthropicKey) return errorJson(res, new Error('GROQ_API_KEY or ANTHROPIC_API_KEY required'), 503);
+      assertPlanAllows(accountId, 'brain.write');
+      const turns = Array.isArray(body.turns) ? body.turns : [];
+      if (turns.length === 0) return errorJson(res, new Error('turns required'));
+      const namespace = String(body.namespace || 'default').slice(0, 120);
+      const sessionId = String(body.sessionId || `sess_${uuid()}`).slice(0, 80);
+      const date = String(body.date || new Date().toISOString().slice(0, 10));
+      const summary = await sdkMain.summarizeSession(turns, {
+        provider: groqKey ? 'groq' : 'anthropic',
+        apiKey: groqKey || anthropicKey,
+        date,
+      });
+      const content = sdkMain.formatSummaryMemory({ sessionId, date, summary });
+      const memory = await storeBrainMemory({
+        namespace, content,
+        tags: ['summary', 'session', sessionId],
+        importance: 0.85,
+      }, accountId);
+      return json(res, { ok: true, sessionId, summary, memory }, 201);
+    } catch (e) {
+      return errorJson(res, e);
+    }
+  }
+
+  // Brain capability report — tells clients which optional features are wired.
+  if (pathname === '/api/v1/brain/capabilities' && req.method === 'GET') {
+    return json(res, {
+      ok: true,
+      mode: brain ? 'recall-engine' : 'fallback',
+      strategy: process.env.MNEMOPAY_BRAIN_STRATEGY || (brain ? 'hybrid' : 'lexical'),
+      embeddingProvider: process.env.MNEMOPAY_BRAIN_EMBEDDING || 'local',
+      llmReasoning: !!reasoner,
+      hydeExpansion: !!hyde,
+      reranker: !!reranker,
+      entityGraph: !!entityGraph,
+      llmEntityExtraction: !!extractEntitiesFn,
+    });
   }
 
   // Prometheus metrics scrape endpoint.
