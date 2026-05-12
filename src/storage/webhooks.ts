@@ -1,0 +1,346 @@
+/**
+ * Persistent Webhook Subscriptions + Outbound Delivery
+ *
+ * The MCP server used to call `webhook_register` and store a Map in process
+ * memory — registrations evaporated on restart, and there was no delivery
+ * loop at all. That was a hard blocker for payments buyers, who look for
+ * webhooks before anything else.
+ *
+ * This module adds:
+ *   - SQLite-backed subscription store (with per-subscription HMAC secret)
+ *   - A `webhook_deliveries` queue of (subscriptionId, event, payload, attempts)
+ *   - `fire(event, payload)` enqueues a delivery for every matching subscription
+ *   - `pumpOnce()` drains a batch: HTTPS POST with HMAC-SHA256 signature,
+ *     exponential backoff, max-retry then DLQ (status='dead')
+ *
+ * Delivery is best-effort and intentionally synchronous-on-fire: we don't
+ * block the caller, but we also don't spin up a background process. The
+ * MCP server calls `pumpOnce()` on a setInterval after the queue is first
+ * touched. Operators can also call it manually via the SDK for a flush.
+ *
+ * Storage location:
+ *   ${MNEMOPAY_PERSIST_DIR || ~/.mnemopay}/webhooks.db
+ *
+ * Signature format:
+ *   X-MnemoPay-Signature: t=<unix-seconds>,v1=<hex-hmac-sha256(t + "." + body)>
+ *   (the Stripe pattern — replay-resistant when receiver checks t freshness)
+ */
+
+import * as crypto from "crypto";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+
+const MAX_ATTEMPTS = 6; // ~ 1s + 2s + 4s + 8s + 16s + 32s ≈ 1 minute total
+const DELIVERY_TIMEOUT_MS = 10_000;
+
+export interface WebhookSubscription {
+  id: string;
+  url: string;
+  events: string[];
+  secret: string;
+  createdAt: number;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  subscriptionId: string;
+  event: string;
+  payload: string; // JSON-encoded
+  attempts: number;
+  nextAttemptAt: number;
+  status: "pending" | "delivered" | "dead";
+  lastError?: string;
+  lastStatusCode?: number;
+  createdAt: number;
+  deliveredAt?: number;
+}
+
+// ── HMAC sign / verify (exported so receivers can use the same helper) ────
+
+export function signPayload(secret: string, body: string, timestamp: number): string {
+  const signedString = `${timestamp}.${body}`;
+  const hmac = crypto.createHmac("sha256", secret).update(signedString).digest("hex");
+  return `t=${timestamp},v1=${hmac}`;
+}
+
+export function verifySignature(
+  secret: string,
+  body: string,
+  header: string,
+  toleranceSeconds: number = 300
+): boolean {
+  const parts = Object.fromEntries(
+    header.split(",").map((p) => {
+      const [k, ...rest] = p.split("=");
+      return [k.trim(), rest.join("=").trim()];
+    })
+  );
+  const t = parseInt(parts.t, 10);
+  const v1 = parts.v1;
+  if (!t || !v1) return false;
+  if (Math.abs(Math.floor(Date.now() / 1000) - t) > toleranceSeconds) return false;
+  const expected = crypto.createHmac("sha256", secret).update(`${t}.${body}`).digest("hex");
+  // constant-time compare
+  const a = Buffer.from(expected, "hex");
+  const b = Buffer.from(v1, "hex");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+// ── Store ──────────────────────────────────────────────────────────────────
+
+export class WebhookStore {
+  private db: any;
+  private dbPath: string;
+
+  constructor(opts: { dbPath?: string } = {}) {
+    this.dbPath = opts.dbPath || WebhookStore.defaultDbPath();
+    this._open();
+    this._createTables();
+  }
+
+  static defaultDbPath(): string {
+    const dir = process.env.MNEMOPAY_PERSIST_DIR || path.join(os.homedir(), ".mnemopay");
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {
+      /* ignore */
+    }
+    return path.join(dir, "webhooks.db");
+  }
+
+  private _open(): void {
+    try {
+      const Database = require("better-sqlite3");
+      this.db = new Database(this.dbPath);
+      this.db.pragma("journal_mode = WAL");
+      this.db.pragma("synchronous = NORMAL");
+    } catch (err: any) {
+      throw new Error(`WebhookStore: failed to open ${this.dbPath} — ${err?.message || err}`);
+    }
+  }
+
+  private _createTables(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        id TEXT PRIMARY KEY,
+        url TEXT NOT NULL,
+        events TEXT NOT NULL,
+        secret TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS deliveries (
+        id TEXT PRIMARY KEY,
+        subscription_id TEXT NOT NULL,
+        event TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        last_error TEXT,
+        last_status_code INTEGER,
+        created_at INTEGER NOT NULL,
+        delivered_at INTEGER,
+        FOREIGN KEY (subscription_id) REFERENCES subscriptions(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_deliveries_status ON deliveries(status, next_attempt_at);
+      CREATE INDEX IF NOT EXISTS idx_deliveries_subscription ON deliveries(subscription_id);
+    `);
+  }
+
+  // ── Subscription API ─────────────────────────────────────────────────────
+
+  register(url: string, events: string[]): WebhookSubscription {
+    const id = `wh_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+    const secret = `whsec_${crypto.randomBytes(24).toString("base64url")}`;
+    const sub: WebhookSubscription = {
+      id,
+      url,
+      events: Array.isArray(events) ? events : [],
+      secret,
+      createdAt: Date.now(),
+    };
+    this.db
+      .prepare(
+        `INSERT INTO subscriptions (id, url, events, secret, created_at) VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(sub.id, sub.url, JSON.stringify(sub.events), sub.secret, sub.createdAt);
+    return sub;
+  }
+
+  list(): WebhookSubscription[] {
+    return this.db
+      .prepare(`SELECT id, url, events, secret, created_at FROM subscriptions`)
+      .all()
+      .map((row: any) => ({
+        id: row.id,
+        url: row.url,
+        events: JSON.parse(row.events),
+        secret: row.secret,
+        createdAt: row.created_at,
+      }));
+  }
+
+  unregister(id: string): boolean {
+    const r = this.db.prepare(`DELETE FROM subscriptions WHERE id = ?`).run(id);
+    return r.changes > 0;
+  }
+
+  matching(event: string): WebhookSubscription[] {
+    return this.list().filter((s) => s.events.includes(event) || s.events.includes("*"));
+  }
+
+  // ── Delivery enqueue ─────────────────────────────────────────────────────
+
+  fire(event: string, payload: any): number {
+    const subs = this.matching(event);
+    if (subs.length === 0) return 0;
+    const body = JSON.stringify({ event, timestamp: Date.now(), ...payload });
+    const now = Date.now();
+    const insert = this.db.prepare(
+      `INSERT INTO deliveries (id, subscription_id, event, payload, attempts, next_attempt_at, status, created_at)
+       VALUES (?, ?, ?, ?, 0, ?, 'pending', ?)`
+    );
+    const tx = this.db.transaction((rows: any[]) => {
+      for (const r of rows) insert.run(...r);
+    });
+    const rows = subs.map((s) => [
+      `whd_${now}_${crypto.randomBytes(6).toString("hex")}`,
+      s.id,
+      event,
+      body,
+      now,
+      now,
+    ]);
+    tx(rows);
+    return subs.length;
+  }
+
+  // ── Delivery worker ──────────────────────────────────────────────────────
+
+  /**
+   * Drains up to `batchSize` ready deliveries.
+   * Returns the count actually attempted (not necessarily succeeded).
+   *
+   * For each delivery: POST to subscription.url with the HMAC header.
+   * On 2xx → mark delivered. On non-2xx or network error → schedule next
+   * attempt with exponential backoff, or mark 'dead' after MAX_ATTEMPTS.
+   */
+  async pumpOnce(batchSize: number = 25, fetchImpl?: typeof fetch): Promise<number> {
+    const ready = this.db
+      .prepare(
+        `SELECT d.*, s.url AS sub_url, s.secret AS sub_secret
+         FROM deliveries d JOIN subscriptions s ON s.id = d.subscription_id
+         WHERE d.status = 'pending' AND d.next_attempt_at <= ?
+         ORDER BY d.next_attempt_at ASC
+         LIMIT ?`
+      )
+      .all(Date.now(), batchSize);
+    if (ready.length === 0) return 0;
+    const doFetch = fetchImpl || (globalThis as any).fetch;
+    if (typeof doFetch !== "function") {
+      throw new Error("WebhookStore.pumpOnce: global fetch not available; pass fetchImpl");
+    }
+    for (const row of ready) {
+      const attempts = row.attempts + 1;
+      const timestamp = Math.floor(Date.now() / 1000);
+      const signature = signPayload(row.sub_secret, row.payload, timestamp);
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);
+        const res = await doFetch(row.sub_url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-mnemopay-signature": signature,
+            "x-mnemopay-event": row.event,
+            "x-mnemopay-delivery": row.id,
+          },
+          body: row.payload,
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (res.status >= 200 && res.status < 300) {
+          this.db
+            .prepare(
+              `UPDATE deliveries SET status='delivered', attempts=?, last_status_code=?, delivered_at=? WHERE id=?`
+            )
+            .run(attempts, res.status, Date.now(), row.id);
+        } else {
+          this._scheduleRetry(row.id, attempts, `HTTP ${res.status}`, res.status);
+        }
+      } catch (err: any) {
+        this._scheduleRetry(row.id, attempts, String(err?.message || err).slice(0, 200), null);
+      }
+    }
+    return ready.length;
+  }
+
+  private _scheduleRetry(
+    deliveryId: string,
+    attempts: number,
+    error: string,
+    statusCode: number | null
+  ): void {
+    if (attempts >= MAX_ATTEMPTS) {
+      this.db
+        .prepare(
+          `UPDATE deliveries SET status='dead', attempts=?, last_error=?, last_status_code=? WHERE id=?`
+        )
+        .run(attempts, error, statusCode, deliveryId);
+      return;
+    }
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s — base 2^attempts seconds
+    const nextDelayMs = Math.pow(2, attempts) * 1000;
+    this.db
+      .prepare(
+        `UPDATE deliveries SET attempts=?, next_attempt_at=?, last_error=?, last_status_code=? WHERE id=?`
+      )
+      .run(attempts, Date.now() + nextDelayMs, error, statusCode, deliveryId);
+  }
+
+  // ── Inspection ───────────────────────────────────────────────────────────
+
+  getDelivery(id: string): WebhookDelivery | undefined {
+    const row = this.db.prepare(`SELECT * FROM deliveries WHERE id = ?`).get(id);
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      subscriptionId: row.subscription_id,
+      event: row.event,
+      payload: row.payload,
+      attempts: row.attempts,
+      nextAttemptAt: row.next_attempt_at,
+      status: row.status,
+      lastError: row.last_error || undefined,
+      lastStatusCode: row.last_status_code || undefined,
+      createdAt: row.created_at,
+      deliveredAt: row.delivered_at || undefined,
+    };
+  }
+
+  countByStatus(): { pending: number; delivered: number; dead: number } {
+    const rows = this.db
+      .prepare(`SELECT status, COUNT(*) AS n FROM deliveries GROUP BY status`)
+      .all();
+    const out = { pending: 0, delivered: 0, dead: 0 } as Record<string, number>;
+    for (const r of rows) out[r.status] = r.n;
+    return out as any;
+  }
+
+  // ── Lifecycle ────────────────────────────────────────────────────────────
+
+  close(): void {
+    try {
+      this.db.pragma("wal_checkpoint(TRUNCATE)");
+    } catch {
+      /* best-effort */
+    }
+    try {
+      this.db.close();
+    } catch {
+      /* best-effort */
+    }
+  }
+}

@@ -71,4 +71,14 @@ export type PersistenceOptions =
       /** Skip CREATE EXTENSION + CREATE TABLE bootstrap (default: false). */
       skipBootstrap?: boolean;
     }
+  | {
+      type: "sqlite";
+      /**
+       * Absolute path to the SQLite DB file. Defaults to
+       * `${MNEMOPAY_PERSIST_DIR || ~/.mnemopay/data}/agent-<agentId>/memory.db`.
+       */
+      dbPath?: string;
+      /** Open the DB read-only (set()/delete() will throw). */
+      readOnly?: boolean;
+    }
   | { type: "custom"; adapter: PersistenceAdapter };

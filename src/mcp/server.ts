@@ -51,6 +51,11 @@ import { StripeRail, LightningRail, MockRail } from "../rails/index.js";
 import { PaystackRail } from "../rails/paystack.js";
 import type { PaymentRail } from "../rails/index.js";
 import type { RequestContext } from "../fraud.js";
+import { PersistentApprovalQueue } from "../storage/approval-queue.js";
+import { WebhookStore } from "../storage/webhooks.js";
+import { SQLiteAdapter } from "../recall/persistence/sqlite.js";
+import { localEmbed } from "../recall/engine.js";
+import * as fs from "fs";
 
 // ─── Security: MCP-level rate limiter ────────────────────────────────────────
 // Separate from per-agent fraud rate limits — this guards the MCP server itself.
@@ -149,6 +154,40 @@ function createAgent(): Agent {
   }
 
   return agent;
+}
+
+// ─── Brain bridge (read-only) ────────────────────────────────────────────────
+// When MNEMOPAY_BRAIN_PATH points at a SQLite file, recall queries ALSO scan
+// that corpus under the fixed agentId "brain" and merge hits into the
+// response with `source: "brain"`. This is the operator-mode hook that lets a
+// shared knowledge base bleed into per-agent recall without giving the agent
+// write access. Disabled by default; opens lazily on first hit.
+
+const BRAIN_AGENT_ID = "brain";
+let brainAdapter: SQLiteAdapter | null = null;
+let brainAdapterTried = false;
+
+function getBrainAdapter(): SQLiteAdapter | null {
+  if (brainAdapterTried) return brainAdapter;
+  brainAdapterTried = true;
+  const brainPath = process.env.MNEMOPAY_BRAIN_PATH;
+  if (!brainPath) return null;
+  try {
+    if (!fs.existsSync(brainPath)) {
+      console.error(
+        `[mnemopay-mcp] MNEMOPAY_BRAIN_PATH=${brainPath} does not exist; brain bridge disabled.`,
+      );
+      return null;
+    }
+    brainAdapter = new SQLiteAdapter({ dbPath: brainPath, readOnly: true });
+    console.error(`[mnemopay-mcp] Brain bridge enabled (read-only): ${brainPath}`);
+    return brainAdapter;
+  } catch (err: any) {
+    console.error(
+      `[mnemopay-mcp] Failed to open brain bridge at ${brainPath}: ${err?.message || err}`,
+    );
+    return null;
+  }
 }
 
 // ─── Tool group registry ────────────────────────────────────────────────────
@@ -333,7 +372,9 @@ const GUIDES: Record<string, { name: string; description: string; body: string }
       "# Webhooks",
       "",
       "`webhook_register(url, events)` subscribes a callback URL to lifecycle events.",
-      "Events are stored in-memory and dispatched when matching events occur.",
+      "Subscriptions are persisted to SQLite; the delivery loop drains pending",
+      "deliveries every ~2s with exponential backoff (1s, 2s, 4s, 8s, 16s, 32s)",
+      "up to 6 attempts before the delivery is marked `dead`.",
       "",
       "Event types:",
       "- `charge.success` — charge accepted into escrow",
@@ -342,8 +383,14 @@ const GUIDES: Record<string, { name: string; description: string; body: string }
       "- `refund`         — transaction reversed",
       "- `transfer.success` — Paystack payout completed",
       "- `transfer.failed`  — Paystack payout failed",
+      "- `*` — subscribe to all events",
       "",
-      "Payloads are JSON with `event`, `txId`, `timestamp`, and event-specific fields.",
+      "Payloads are JSON with `event`, `timestamp` (ms), and event-specific fields.",
+      "",
+      "Signature: each POST carries `X-MnemoPay-Signature: t=<unix-seconds>,v1=<hex>`",
+      "where `v1 = HMAC-SHA256(secret, t + '.' + body)`. Reject requests where",
+      "`now - t > 300s` to defend against replay. The signing secret is returned",
+      "ONCE from `webhook_register` — store it before the call returns.",
     ].join("\n"),
   },
   "guide/checkout": {
@@ -891,10 +938,52 @@ async function executeTool(agent: Agent, name: string, args: Record<string, any>
       const memories = args.query
         ? await agent.recall(args.query, limit)
         : await agent.recall(limit);
-      if (memories.length === 0) return "No memories found.";
-      return memories
-        .map((m, i) => `${i + 1}. [score:${m.score.toFixed(2)}, importance:${m.importance.toFixed(2)}] ${m.content}`)
-        .join("\n");
+
+      // Optional read-only bridge into the shared brain corpus. Only active
+      // when MNEMOPAY_BRAIN_PATH is set and the file exists. The agent's own
+      // memories stay primary; brain hits are appended with a source flag so
+      // the caller can tell them apart.
+      const brain = getBrainAdapter();
+      let brainHits: Array<{ id: string; content: string; score: number; source: "brain" }> = [];
+      if (brain && args.query) {
+        try {
+          const queryVec = localEmbed(String(args.query));
+          const hits = await brain.search(BRAIN_AGENT_ID, queryVec, limit);
+          brainHits = hits.map((h) => ({
+            id: h.id,
+            content: h.content,
+            score: h.score,
+            source: "brain" as const,
+          }));
+        } catch (err: any) {
+          console.error(
+            `[mnemopay-mcp] brain bridge search failed (non-fatal): ${err?.message || err}`,
+          );
+        }
+      }
+
+      if (memories.length === 0 && brainHits.length === 0) return "No memories found.";
+
+      // When the brain bridge is inactive, keep the legacy text format so
+      // existing consumers (and tests) don't break.
+      if (brainHits.length === 0) {
+        return memories
+          .map((m, i) => `${i + 1}. [score:${m.score.toFixed(2)}, importance:${m.importance.toFixed(2)}] ${m.content}`)
+          .join("\n");
+      }
+
+      // With brain hits in the mix, return structured JSON so the caller
+      // can tell which corpus each hit came from.
+      return JSON.stringify({
+        agent: memories.map((m) => ({
+          id: m.id,
+          content: m.content,
+          score: m.score,
+          importance: m.importance,
+          source: "agent" as const,
+        })),
+        brain: brainHits,
+      });
     }
 
     case "forget": {
@@ -914,16 +1003,19 @@ async function executeTool(agent: Agent, name: string, args: Record<string, any>
 
     case "charge": {
       const tx = await agent.charge(args.amount, args.reason);
+      fireWebhook("charge.success", { txId: tx.id, amount: tx.amount, status: tx.status, reason: tx.reason, agentId: (agent as any).agentId });
       return JSON.stringify({ txId: tx.id, amount: tx.amount, status: tx.status, reason: tx.reason });
     }
 
     case "settle": {
       const tx = await agent.settle(args.txId, args.counterpartyId);
+      fireWebhook("settle", { txId: tx.id, amount: tx.amount, status: tx.status, rail: (agent as any).paymentRail?.name, agentId: (agent as any).agentId });
       return JSON.stringify({ txId: tx.id, amount: tx.amount, status: tx.status, rail: (agent as any).paymentRail?.name });
     }
 
     case "refund": {
       const tx = await agent.refund(args.txId);
+      fireWebhook("refund", { txId: tx.id, status: tx.status, agentId: (agent as any).agentId });
       return JSON.stringify({ txId: tx.id, status: tx.status });
     }
 
@@ -1079,15 +1171,16 @@ async function executeTool(agent: Agent, name: string, args: Record<string, any>
     // ── Approval / HITL handlers ───────────────────────────────────────────
 
     case "shop_pending_approvals": {
-      const shopApprovals = Array.from(pendingApprovals.entries()).map(([id, entry]) => ({
+      const queue = approvalQueue();
+      const shopApprovals = Array.from(queue.shopApprovals.entries()).map(([id, entry]) => ({
         orderId: id,
-        product: entry.order.product?.title,
-        price: entry.order.product?.price,
-        merchant: entry.order.product?.merchant,
+        product: entry.order?.product?.title,
+        price: entry.order?.product?.price,
+        merchant: entry.order?.product?.merchant,
         waitingSince: new Date(entry.createdAt).toISOString(),
         expiresIn: Math.max(0, Math.round((600_000 - (Date.now() - entry.createdAt)) / 1000)) + "s",
       }));
-      const chargeRequests = Array.from(pendingChargeRequests.entries()).map(([id, entry]) => ({
+      const chargeRequests = Array.from(queue.charges.entries()).map(([id, entry]) => ({
         requestId: id,
         amount: entry.amount,
         reason: entry.reason,
@@ -1101,24 +1194,26 @@ async function executeTool(agent: Agent, name: string, args: Record<string, any>
     }
 
     case "shop_approve": {
-      const entry = pendingApprovals.get(args.orderId);
+      const queue = approvalQueue();
+      const entry = queue.shopApprovals.get(args.orderId);
       if (!entry) throw new Error(`No pending approval for order ${args.orderId}`);
       entry.resolve(true);
-      pendingApprovals.delete(args.orderId);
+      queue.removeShopApproval(args.orderId);
       return JSON.stringify({ status: "approved", orderId: args.orderId, message: "Purchase approved. Escrow and purchase executing." });
     }
 
     case "shop_reject": {
-      const entry = pendingApprovals.get(args.orderId);
+      const queue = approvalQueue();
+      const entry = queue.shopApprovals.get(args.orderId);
       if (!entry) throw new Error(`No pending approval for order ${args.orderId}`);
       entry.resolve(false);
-      pendingApprovals.delete(args.orderId);
+      queue.removeShopApproval(args.orderId);
       return JSON.stringify({ status: "rejected", orderId: args.orderId, message: "Purchase rejected. No money moved." });
     }
 
     case "charge_request": {
       const requestId = `cr_${Date.now()}_${require("crypto").randomBytes(4).toString("hex")}`;
-      pendingChargeRequests.set(requestId, {
+      approvalQueue().addCharge({
         id: requestId,
         amount: args.amount,
         reason: args.reason,
@@ -1137,11 +1232,11 @@ async function executeTool(agent: Agent, name: string, args: Record<string, any>
     }
 
     case "charge_approve": {
-      const req = pendingChargeRequests.get(args.requestId);
+      const req = approvalQueue().removeCharge(args.requestId);
       if (!req) throw new Error(`No pending charge request ${args.requestId}`);
-      pendingChargeRequests.delete(args.requestId);
       // Execute the real charge
       const tx = await agent.charge(req.amount, req.reason, req.context, req.payOptions);
+      fireWebhook("charge.success", { txId: tx.id, amount: tx.amount, status: tx.status, reason: req.reason, hitlRequestId: args.requestId, agentId: (agent as any).agentId });
       return JSON.stringify({
         status: "charged",
         requestId: args.requestId,
@@ -1154,9 +1249,8 @@ async function executeTool(agent: Agent, name: string, args: Record<string, any>
     }
 
     case "charge_reject": {
-      const req = pendingChargeRequests.get(args.requestId);
+      const req = approvalQueue().removeCharge(args.requestId);
       if (!req) throw new Error(`No pending charge request ${args.requestId}`);
-      pendingChargeRequests.delete(args.requestId);
       return JSON.stringify({
         status: "rejected",
         requestId: args.requestId,
@@ -1346,6 +1440,15 @@ async function executeTool(agent: Agent, name: string, args: Record<string, any>
         args.reason,
         (agent as any).agentId,
       );
+      fireWebhook("transfer.success", {
+        transferCode: transfer.externalId,
+        reference: transfer.reference,
+        amount: transfer.amount,
+        recipientCode: recipient.recipientCode,
+        recipientName: recipient.name,
+        transferStatus: transfer.transferStatus,
+        agentId: (agent as any).agentId,
+      });
       return JSON.stringify({
         status: "initiated",
         transferCode: transfer.externalId,
@@ -1374,32 +1477,38 @@ async function executeTool(agent: Agent, name: string, args: Record<string, any>
     // ── Webhooks ────────────────────────────────────────────────────────
 
     case "webhook_register": {
-      const id = `wh_${Date.now()}_${require("crypto").randomBytes(4).toString("hex")}`;
       const webhookUrl = String(args.url || "");
+      const allowLocal = process.env.MNEMOPAY_WEBHOOK_ALLOW_LOCAL === "1";
       try {
         const parsed = new URL(webhookUrl);
-        if (parsed.protocol !== "https:") throw new Error("Webhook URL must use HTTPS");
+        if (parsed.protocol !== "https:" && !(allowLocal && parsed.protocol === "http:")) {
+          throw new Error("Webhook URL must use HTTPS");
+        }
         const hostname = parsed.hostname;
-        if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "0.0.0.0" ||
-            hostname.startsWith("10.") || hostname.startsWith("192.168.") || hostname.startsWith("169.254.") ||
-            hostname === "::1" || hostname === "[::1]") {
+        if (!allowLocal && (
+          hostname === "localhost" || hostname === "127.0.0.1" || hostname === "0.0.0.0" ||
+          hostname.startsWith("10.") || hostname.startsWith("192.168.") || hostname.startsWith("169.254.") ||
+          hostname === "::1" || hostname === "[::1]"
+        )) {
           throw new Error("Webhook URL must not point to private/local addresses");
         }
       } catch (e: any) {
         return JSON.stringify({ error: e.message || "Invalid webhook URL" });
       }
-      _webhooks.set(id, { id, url: webhookUrl, events: args.events, createdAt: Date.now() });
+      const events = Array.isArray(args.events) ? args.events : [];
+      const sub = webhookStore().register(webhookUrl, events);
       return JSON.stringify({
-        webhookId: id,
-        url: args.url,
-        events: args.events,
+        webhookId: sub.id,
+        url: sub.url,
+        events: sub.events,
+        signingSecret: sub.secret,
         status: "registered",
-        message: "Webhook will receive POST requests when matching events occur.",
+        message: "Store the signing secret — it will not be shown again. Verify the X-MnemoPay-Signature header (HMAC-SHA256, format `t=<ts>,v1=<hex>`).",
       });
     }
 
     case "webhook_list": {
-      const hooks = Array.from(_webhooks.values()).map(w => ({
+      const hooks = webhookStore().list().map(w => ({
         webhookId: w.id,
         url: w.url,
         events: w.events,
@@ -1449,51 +1558,78 @@ const _merkleTree = new MerkleTree();
 const _ewmaDetector = new EWMADetector(0.15, 2.5, 3.5, 10);
 
 // ── Approval queues (HITL) ──────────────────────────────────────────────────
+// Backed by SQLite — `pod restart drops pending approvals` was a hard blocker
+// for fintech buyers. PersistentApprovalQueue mirrors the Maps to disk and
+// rehydrates on startup. See src/storage/approval-queue.ts.
+//
+// Tests that want a clean queue should pass MNEMOPAY_PERSIST_DIR=<tmpdir>
+// or wipe ~/.mnemopay/approvals.db between runs.
 
-interface PendingApproval {
-  order: any;
-  resolve: (approved: boolean) => void;
-  createdAt: number;
+let _approvalQueue: PersistentApprovalQueue | null = null;
+export function approvalQueue(): PersistentApprovalQueue {
+  if (!_approvalQueue) _approvalQueue = new PersistentApprovalQueue();
+  return _approvalQueue;
 }
 
-interface PendingChargeRequest {
-  id: string;
-  amount: number;
-  reason: string;
-  context?: any;
-  payOptions?: any;
-  createdAt: number;
+// Test-only: reset the queue singleton (used by suite tear-down).
+export function _resetApprovalQueueForTests(): void {
+  try {
+    _approvalQueue?.close();
+  } catch {
+    /* ignore */
+  }
+  _approvalQueue = null;
 }
-
-const pendingApprovals = new Map<string, PendingApproval>();
-const pendingChargeRequests = new Map<string, PendingChargeRequest>();
 
 // ── Webhook registry ───────────────────────────────────────────────────────
+// Backed by SQLite via WebhookStore. Subscriptions persist across restarts;
+// deliveries enqueue + retry with exponential backoff; HMAC-SHA256 signing.
 
-interface WebhookSubscription {
-  id: string;
-  url: string;
-  events: string[];
-  createdAt: number;
+let _webhookStore: WebhookStore | null = null;
+let _webhookPumpStarted = false;
+export function webhookStore(): WebhookStore {
+  if (!_webhookStore) {
+    _webhookStore = new WebhookStore();
+    if (!_webhookPumpStarted) {
+      _webhookPumpStarted = true;
+      // Drain pending deliveries every 2s. unref so we never block process exit.
+      setInterval(() => {
+        _webhookStore?.pumpOnce().catch((err) => {
+          console.error(`[mnemopay-mcp] webhook pump error: ${err?.message || err}`);
+        });
+      }, 2000).unref?.();
+    }
+  }
+  return _webhookStore;
 }
 
-const _webhooks = new Map<string, WebhookSubscription>();
+// Test-only: reset the webhook store singleton.
+export function _resetWebhookStoreForTests(): void {
+  try {
+    _webhookStore?.close();
+  } catch {
+    /* ignore */
+  }
+  _webhookStore = null;
+  _webhookPumpStarted = false;
+}
 
-// Auto-expire pending approvals after 10 minutes
+/** Convenience: fire if a store is open. Never throws; never blocks the caller. */
+function fireWebhook(event: string, payload: any): void {
+  try {
+    webhookStore().fire(event, payload);
+  } catch (err: any) {
+    console.error(`[mnemopay-mcp] webhook fire failed: ${err?.message || err}`);
+  }
+}
+
+// Auto-expire pending approvals after 10 minutes — runs only when a queue
+// has been instantiated, so module load alone doesn't open the DB.
 setInterval(() => {
-  const now = Date.now();
-  for (const [id, entry] of pendingApprovals) {
-    if (now - entry.createdAt > 600_000) {
-      entry.resolve(false); // auto-reject expired approvals
-      pendingApprovals.delete(id);
-    }
+  if (_approvalQueue) {
+    _approvalQueue.expireOlderThan(600_000);
   }
-  for (const [id, entry] of pendingChargeRequests) {
-    if (now - entry.createdAt > 600_000) {
-      pendingChargeRequests.delete(id);
-    }
-  }
-}, 60_000);
+}, 60_000).unref?.();
 
 // ── Commerce singleton ──────────────────────────────────────────────────────
 
@@ -1532,9 +1668,17 @@ async function getCommerceEngine(agent: Agent): Promise<any> {
 
     // ── Wire approval callback (HITL) ────────────────────────────────────
     _commerceEngine.onApprovalRequired(async (order: any) => {
-      // Queue the order for user approval instead of auto-approving
+      // Queue the order for user approval instead of auto-approving.
+      // Persist alongside the in-memory resolver so a pod restart leaves the
+      // order visible to the operator (the original Promise is dead, but the
+      // operator can shop_reject to release any downstream state).
       return new Promise<boolean>((resolve) => {
-        pendingApprovals.set(order.id, { order, resolve, createdAt: Date.now() });
+        approvalQueue().addShopApproval({
+          orderId: order.id,
+          order,
+          createdAt: Date.now(),
+          resolve,
+        });
       });
     });
   }

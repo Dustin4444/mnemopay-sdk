@@ -17,6 +17,7 @@
 import type { PersistenceAdapter, PersistenceOptions } from "./persistence/types.js";
 import { MemoryAdapter } from "./persistence/memory.js";
 import { NeonAdapter } from "./persistence/neon.js";
+import { SQLiteAdapter } from "./persistence/sqlite.js";
 import { getObservation as lookupObservation } from "./observations.js";
 
 export type RecallStrategy = "score" | "vector" | "hybrid";
@@ -442,6 +443,7 @@ function sanitizeFTS5Query(rawQuery: string, injectPreference = false): string {
 
 function resolvePersistence(
   persist: PersistenceOptions | PersistenceAdapter | undefined,
+  agentId?: string,
 ): { adapter: PersistenceAdapter; ownsAdapter: boolean } {
   // Heuristic: a full adapter has all five required methods.
   if (
@@ -470,6 +472,18 @@ function resolvePersistence(
           url: opts.url,
           table: opts.table,
           skipBootstrap: opts.skipBootstrap,
+        }),
+        ownsAdapter: true,
+      };
+    }
+    case "sqlite": {
+      // When dbPath is omitted, fall back to the per-agent default
+      // (${MNEMOPAY_PERSIST_DIR || ~/.mnemopay/data}/agent-<id>/memory.db).
+      return {
+        adapter: new SQLiteAdapter({
+          dbPath: opts.dbPath,
+          readOnly: opts.readOnly,
+          agentId: agentId ?? "default",
         }),
         ownsAdapter: true,
       };
@@ -504,7 +518,10 @@ export class RecallEngine {
   private contents: Map<string, string> = new Map();
 
   constructor(config: Partial<RecallEngineConfig> = {}) {
-    const { adapter, ownsAdapter } = resolvePersistence(config.persist);
+    const { adapter, ownsAdapter } = resolvePersistence(
+      config.persist,
+      config.agentId,
+    );
     this.adapter = adapter;
     this.ownsAdapter = ownsAdapter;
 

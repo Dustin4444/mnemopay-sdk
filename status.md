@@ -1,4 +1,90 @@
-﻿# mnemopay-sdk status - 2026-05-11 Claude (Forge consumer dogfood)
+﻿# mnemopay-sdk status - 2026-05-12 Claude (Brain bridge + HITL/webhook persistence)
+
+## Closed three "ready to take paying customers" hard blockers in one pass
+
+### HITL approval queue is now durable
+`pendingChargeRequests` + `pendingApprovals` used to be in-process Maps — a pod
+restart silently dropped every pending charge approval. Now backed by
+`src/storage/approval-queue.ts` (SQLite, WAL, single-process writes). On
+startup, charges rehydrate verbatim; shop approvals rehydrate with a no-op
+`resolve` so the operator can `shop_reject` to clean up. 10-minute expiry
+sweep runs only when the queue has been touched. **6 tests passing** —
+`tests/approval-queue.test.ts` covers rebuild persistence, deletion
+persistence, expiry, undef-context round-trip, and the explicit dead-Promise
+contract.
+
+### Webhooks actually fire
+`webhook_register` used to write to an in-memory Map with zero delivery. Now
+`src/storage/webhooks.ts` persists subscriptions (with HMAC secret), enqueues
+deliveries via `fire()`, drains via `pumpOnce()` on a 2s setInterval with
+exponential backoff (1s→32s, 6 attempts), and DLQs (`status='dead'`) after
+exhaustion. Signature is the Stripe pattern:
+`X-MnemoPay-Signature: t=<unix-seconds>,v1=<hex-hmac-sha256(t + "." + body)>`.
+`fireWebhook(event, payload)` is wired into `charge`, `charge_approve`,
+`settle`, `refund`, `payout_create` (success-side; failure events deferred).
+**10 tests passing** — `tests/webhooks.test.ts` covers persistence, wildcard
+matching, HMAC roundtrip + tamper detection, retry, DLQ at MAX_ATTEMPTS,
+stale-timestamp rejection.
+
+### SQLiteAdapter + brain bridge — the "fully wired" answer
+New `src/recall/persistence/sqlite.ts` implements the `PersistenceAdapter`
+contract with better-sqlite3 + WAL + per-agent namespace path
+(`~/.mnemopay/data/agent-<id>/memory.db`). `readOnly: true` mode refuses
+set/delete and rejects missing files. Added `{type: "sqlite"}` to the
+`PersistenceOptions` union; resolver in `engine.ts` threads `agentId` through
+so the default path is per-agent.
+
+`mcp/server.ts` now reads `MNEMOPAY_BRAIN_PATH` and, when set, opens a
+read-only `SQLiteAdapter` against that file under the fixed agentId
+`"brain"`. The `recall` tool first runs per-agent recall, then merges brain
+hits with `source: "brain"` in the response. Default off; opens lazily.
+
+The brain repo (`C:/Users/bizsu/Projects/brain`) ships a SQL VIEW
+(`memory_rows`) over its `pages + embeddings` join, schema-mapping its rows
+into the adapter contract. Zero data duplication, zero migration — the live
+4.3 MB `.brain/index.db` keeps its full graph schema and the bridge reads
+through the view. End-to-end smoke verified: query "Jeremiah Omiagbo" via
+`SQLiteAdapter(readOnly: true)` against the brain DB returns the expected
+hits (top: `people/jeremiah-omiagbo.md` @ 0.46).
+
+**10 adapter tests passing** — roundtrip, idempotent delete, top-K cosine
+ordering, agent isolation, persistence across reopen, readOnly contract.
+`mcp-import` smoke test unchanged.
+
+### Marketing surface cleanup
+- `mnemopay.com/console` reframed from "v0.1 preview with mock data + email
+  for early access" → "guided tour of the governance surface + Start Pro"
+  with no disabled buttons. Every CTA goes to Stripe Pro or SDK docs.
+- "Sign in" link added to nav across `index.html`, `pricing.html`,
+  `console.html` pointing at `https://dashboard.mnemopay.com`.
+- The hosted dashboard (`mnemopay-landing.fly.dev`) is fully production-shaped:
+  all required secrets deployed (Stripe live secret + webhook secret, Resend,
+  session, public URL, store driver). `/readyz` returns all checks green.
+- Issued Fly cert for `dashboard.mnemopay.com` on `mnemopay-landing`. Added
+  the A (66.241.124.80) + AAAA (2a09:8280:1::ff:d89a:0) records via the
+  Namecheap API — full set of 15 hosts written in one `setHosts` call.
+- `server.json` bumped 1.4.2 → 1.6.1 (MCP registry). `package.json` bumped
+  to 1.6.1 — npm already has 1.6.0 published.
+
+### Confirmed (audit was wrong on these)
+- `brain.mnemopay.com` was already deployed and healthy (`/health` 200).
+- Brain Windows cron jobs (`RevenuePulse`, `UserWatch`, `DailyBrief`) all
+  `Ready` in Task Scheduler.
+- Dashboard was already on Fly with full secrets — only the custom hostname
+  was missing.
+
+### Followups
+- Full `npm test` run after this entry to confirm no regressions across the
+  existing suite.
+- `npm publish` for v1.6.1 once tests green and Jeremiah greenlights.
+- Failure-event webhooks (`charge.failed`, `transfer.failed`) — needs
+  try/catch restructure of the rail call sites; deferred.
+- Brain repo separately bumped its `@mnemopay/sdk` peer to 1.6.1 once
+  published.
+
+---
+
+# mnemopay-sdk status - 2026-05-11 Claude (Forge consumer dogfood)
 
 ## First in-engine consumer of `@mnemopay/sdk/recall` — Forge persona memory
 

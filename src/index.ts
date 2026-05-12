@@ -2224,6 +2224,8 @@ export type { RecallStrategy, EmbeddingProvider, RecallEngineConfig, RecallResul
 export { MemoryAdapter } from "./recall/persistence/memory.js";
 export { NeonAdapter } from "./recall/persistence/neon.js";
 export type { NeonAdapterConfig } from "./recall/persistence/neon.js";
+export { SQLiteAdapter } from "./recall/persistence/sqlite.js";
+export type { SQLiteAdapterConfig } from "./recall/persistence/sqlite.js";
 export type { PersistenceAdapter, PersistenceOptions, PersistedRow, SearchHit } from "./recall/persistence/types.js";
 export { FraudGuard, RateLimiter, DEFAULT_FRAUD_CONFIG, DEFAULT_RATE_LIMIT } from "./fraud.js";
 export type { FraudConfig, FeeTier, FraudSignal, RiskAssessment, Dispute, PlatformFeeRecord, RequestContext, RateLimitConfig, GeoProfile, GeoFraudConfig } from "./fraud.js";
