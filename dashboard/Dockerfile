@@ -11,6 +11,12 @@ RUN npm run build
 
 FROM node:20-slim AS dashboard
 WORKDIR /app
+# Build tools for native modules (better-sqlite3 prebuilt fallback compilation).
+# Required when npm install can't find a prebuilt binary for the current
+# node-abi/platform combo and falls back to source build via node-gyp.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 COPY dashboard/package.json dashboard/package-lock.json* ./
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev || npm install --omit=dev; else npm install --omit=dev; fi
 
