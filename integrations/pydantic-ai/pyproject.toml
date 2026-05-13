@@ -9,7 +9,7 @@ description = "MnemoPay tools for Pydantic AI — persistent memory + micropayme
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
-authors = [{name = "Jerry Omiagbo", email = "jeremiah@getbizsuite.com"}]
+authors = [{name = "Jeremiah Omiagbo", email = "info@getbizsuite.com"}]
 keywords = ["pydantic", "pydantic-ai", "mnemopay", "memory", "payments", "mcp"]
 dependencies = ["pydantic-ai>=0.1.0"]
 

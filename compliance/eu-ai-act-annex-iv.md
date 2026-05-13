@@ -3,7 +3,7 @@
 **Regulation:** EU AI Act (Regulation 2024/1689), Annex IV technical documentation requirements.
 **Risk classification:** Limited risk (Article 50 transparency obligations applicable to agent interactions; not high-risk per Annex III).
 **Last reviewed:** 2026-04-21
-**Maintainer:** Jerry Omiagbo, J&B Enterprise LLC (d/b/a MnemoPay), jeremiah@getbizsuite.com
+**Maintainer:** Jeremiah Omiagbo, J&B Enterprise LLC (d/b/a MnemoPay), info@getbizsuite.com
 
 > This document is the voluntary technical-file stub MnemoPay maintains ahead of the Aug 2, 2026 GPAI + transparency deadlines. @mnemopay/sdk is a developer SDK — not a deployed AI system — so most Annex IV items are inherited from the deploying developer. What follows is the portion MnemoPay, as the SDK provider, holds responsible.
 
@@ -55,7 +55,7 @@ Semantic versioning. Breaking changes trigger minor-version bump and a migration
 3. Auditor has not been engaged; this file is self-prepared.
 
 ## 10. Contact + responsible party
-Jerry Omiagbo, J&B Enterprise LLC (d/b/a MnemoPay), Texas USA. jeremiah@getbizsuite.com. https://mnemopay.com.
+Jeremiah Omiagbo, J&B Enterprise LLC (d/b/a MnemoPay), Texas USA. info@getbizsuite.com. https://mnemopay.com.
 
 ---
 

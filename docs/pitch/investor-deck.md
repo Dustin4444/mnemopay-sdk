@@ -10,7 +10,7 @@ Use this as (a) the source-of-truth script when talking through the deck, and (b
 
 MnemoPay · Seed round · 2026
 
-Contact: jeremiah@getbizsuite.com · cal.com/jeremiah-bizsuite
+Contact: info@getbizsuite.com · cal.com/jeremiah-bizsuite
 
 ---
 
@@ -135,7 +135,7 @@ Unit economics:
 
 ## Slide 11 — Team
 
-**Jerry Omiagbo** — Founder, full-stack engineer. Dallas, TX.
+**Jeremiah Omiagbo** — Founder, full-stack engineer. Dallas, TX.
 
 - Solo-shipped 18 repos and 672 tests in 90 days
 - Published SDKs: `@mnemopay/sdk`, `mnemopay` (PyPI), `gridstamp`
@@ -156,7 +156,7 @@ Use of funds:
 - 20% infrastructure (Neon + Stripe reliability)
 - 10% runway buffer
 
-Next step: 30-min technical call. cal.com/jeremiah-bizsuite · jeremiah@getbizsuite.com
+Next step: 30-min technical call. cal.com/jeremiah-bizsuite · info@getbizsuite.com
 
 ---
 

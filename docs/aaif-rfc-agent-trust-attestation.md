@@ -1,7 +1,7 @@
 # RFC: Agent Trust Attestation Protocol (ATAP)
 
 **Status:** Draft
-**Author:** Jerry Omiagbo (MnemoPay)
+**Author:** Jeremiah Omiagbo (MnemoPay)
 **Target:** AAIF (Agentic AI Interoperability Foundation)
 **Date:** April 2026
 

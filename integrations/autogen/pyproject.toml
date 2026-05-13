@@ -9,7 +9,7 @@ description = "MnemoPay extension for Microsoft AutoGen — persistent memory + 
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
-authors = [{name = "Jerry Omiagbo", email = "jeremiah@getbizsuite.com"}]
+authors = [{name = "Jeremiah Omiagbo", email = "info@getbizsuite.com"}]
 keywords = ["autogen", "microsoft", "mnemopay", "memory", "payments", "mcp"]
 dependencies = ["autogen-core>=0.4.0"]
 

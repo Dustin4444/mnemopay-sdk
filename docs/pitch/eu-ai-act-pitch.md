@@ -69,14 +69,14 @@ const agent = MnemoPay.quick("agent-42", {
 15-minute technical call with Jerry (founder) and your head of compliance.
 
 - **Book:** cal.com/jeremiah-bizsuite/15min
-- **Email:** jeremiah@getbizsuite.com
+- **Email:** info@getbizsuite.com
 - **GitHub:** github.com/mnemopay/mnemopay-sdk
 
 ---
 
 ## Cold email template (top 6 send-ready prospects)
 
-Send from `jeremiah@getbizsuite.com`. Subject personalizes by role.
+Send from `info@getbizsuite.com`. Subject personalizes by role.
 
 **Subject:** Article 13 audit logs + Article 53 traceability — one npm install
 
@@ -94,7 +94,7 @@ Send from `jeremiah@getbizsuite.com`. Subject personalizes by role.
 >
 > Jerry
 > Founder, MnemoPay (J&B Enterprise LLC)
-> jeremiah@getbizsuite.com
+> info@getbizsuite.com
 
 **Personalization hooks (per prospect — adapt the opener):**
 - Mistral → "Saw the Magistral release — open-weights stance matters here, since GPAI Art. 53 disclosure obligations land hardest on open providers."

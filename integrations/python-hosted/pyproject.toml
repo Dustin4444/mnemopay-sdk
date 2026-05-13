@@ -9,7 +9,7 @@ description = "Dependency-free Python client for the hosted MnemoPay API"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
-authors = [{name = "J&B Enterprise LLC", email = "jeremiah@getbizsuite.com"}]
+authors = [{name = "J&B Enterprise LLC", email = "info@getbizsuite.com"}]
 keywords = ["mnemopay", "ai-agents", "agent-memory", "agent-payments", "audit"]
 
 [tool.setuptools]

@@ -31,7 +31,7 @@ Slides:
 8. Market — $10.91B agent economy 2026. Mem0 ($24M raised, 88K weekly downloads), AGT.finance, Kite ($33M), Bank of Bots — none has the full stack. Agent FICO category is unclaimed.
 9. Business model — usage-based: 1.0%-2.5% transaction fee (tier by score), $49/mo Pro, $299/mo Enterprise. Live on Stripe.
 10. Go-to-market — 3 wedges: EU AI Act compliance (Aug 2 2026 deadline), drone delivery proof-of-presence (GridStamp sister product), MCP server monetization (sub-cent billing per tool call).
-11. Team — Jerry Omiagbo, founder, full-stack, Dallas TX. J&B Enterprise LLC. Solo-shipped 18 repos, 672 tests, multiple published SDKs in 90 days.
+11. Team — Jeremiah Omiagbo, founder, full-stack, Dallas TX. J&B Enterprise LLC. Solo-shipped 18 repos, 672 tests, multiple published SDKs in 90 days.
 12. Ask — $X at $Ym post. Use of funds: 40% eng (2 hires), 30% GTM, 20% infra, 10% runway buffer. Close with email + Cal link.
 
 Constraints:
@@ -52,7 +52,7 @@ Layout:
 - Top 15%: logo left, tagline right ("Agent banking infrastructure. One SDK."), plus a tiny "Seed round — 2026" badge.
 - 40% hero: three stacked metric blocks — "672 tests passing" / "v1.0.0-beta.1 shipped on npm" / "1.0% fee at score 800+". Numbers at 96pt, label at 11pt all-caps gray.
 - 30% body: three columns — "What it does" (memory + payments + identity + credit score), "Why now" ($2.66B invested in agent payments 2026, Aug 2 EU AI Act deadline), "Why us" (only full-stack competitor, behavioral finance moat, 90-day build velocity).
-- 15% footer: 3-line "Ask" block ($X at $Ym), then contact line (jeremiah@getbizsuite.com, Cal.com link, GitHub link).
+- 15% footer: 3-line "Ask" block ($X at $Ym), then contact line (info@getbizsuite.com, Cal.com link, GitHub link).
 
 Visual: off-black background, electric violet accent, Inter font. Include a minimalist sparkline chart showing npm weekly downloads trend if you can fake it tastefully.
 
@@ -80,7 +80,7 @@ Slides:
 3. What MnemoPay ships that maps to each: Merkle-chained memory integrity (Article 13 audit logs), IdentityRegistry + KYA (Article 53 traceability), AgentCreditScore + behavioral monitor (Annex III high-risk risk management).
 4. Integration demo — actual code, 6 lines. Show how an existing agent gets Act-ready without rewriting the core.
 5. Validation evidence — 672 tests, Merkle integrity spec, EWMA anomaly spec, independent legal review note (cite your Apr 9 legal pass if relevant).
-6. Next step — "15-minute technical call with Jerry, your CTO, and one of our compliance engineers. Cal.com/jeremiah-bizsuite/15min". Email: jeremiah@getbizsuite.com.
+6. Next step — "15-minute technical call with Jerry, your CTO, and one of our compliance engineers. Cal.com/jeremiah-bizsuite/15min". Email: info@getbizsuite.com.
 
 Visual: clean white background (compliance context = trust = light theme). Accent: navy #0B2948. Serif headings (think New York Times Magazine), sans body. No emojis, no gradients.
 

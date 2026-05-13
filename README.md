@@ -619,4 +619,4 @@ MnemoPay is not a bank, money transmitter, or insurer, and does not hold custome
 
 ---
 
-Built by [Jerry Omiagbo](https://github.com/mnemopay)
+Built by [Jeremiah Omiagbo](https://github.com/mnemopay)

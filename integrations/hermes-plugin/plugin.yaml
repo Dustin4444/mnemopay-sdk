@@ -5,7 +5,7 @@ description: >
   Upgrades Hermes's built-in memory with cognitive recall (semantic search,
   importance scoring, decay-based consolidation) and adds escrow economics
   (charge, settle, refund) with reputation tracking.
-author: Jerry Omiagbo <jeremiah@getbizsuite.com>
+author: Jeremiah Omiagbo <info@getbizsuite.com>
 homepage: https://github.com/mnemopay/mnemopay-sdk
 license: MIT
 tags:

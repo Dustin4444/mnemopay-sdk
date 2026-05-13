@@ -9,7 +9,7 @@ description = "MnemoPay toolkit for Agno — persistent memory + micropayments"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
-authors = [{name = "Jerry Omiagbo", email = "jeremiah@getbizsuite.com"}]
+authors = [{name = "Jeremiah Omiagbo", email = "info@getbizsuite.com"}]
 keywords = ["agno", "phidata", "mnemopay", "memory", "payments", "mcp"]
 dependencies = ["agno>=1.0.0"]
 

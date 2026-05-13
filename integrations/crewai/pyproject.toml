@@ -9,7 +9,7 @@ description = "MnemoPay tools for CrewAI — give any crew persistent memory and
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
-authors = [{name = "Jerry Omiagbo", email = "jeremiah@getbizsuite.com"}]
+authors = [{name = "Jeremiah Omiagbo", email = "info@getbizsuite.com"}]
 keywords = ["crewai", "mnemopay", "ai-agents", "memory", "payments", "mcp"]
 
 dependencies = [

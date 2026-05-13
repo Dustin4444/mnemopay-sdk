@@ -90,7 +90,7 @@ console: https://mnemopay.com/console
 i answer this email directly — if anything blocks you, reply.
 
 — jeremiah
-jeremiah@getbizsuite.com`,
+info@getbizsuite.com`,
       };
     }
 
@@ -155,7 +155,7 @@ i read every reply. the second question shapes the next release — the first on
 reply with two sentences. or one. or just the blocker.
 
 — jeremiah
-jeremiah@getbizsuite.com`,
+info@getbizsuite.com`,
       };
     }
 
@@ -175,7 +175,7 @@ jeremiah@getbizsuite.com`,
  */
 async function sendMailerooTemplate(to, templateId, vars = {}, opts = {}) {
   const apiKey = opts.apiKey || process.env.MAILEROO_API_KEY;
-  const from = opts.from || process.env.MAILEROO_FROM || 'jeremiah@getbizsuite.com';
+  const from = opts.from || process.env.MAILEROO_FROM || 'info@getbizsuite.com';
   const apiUrl = opts.apiUrl || process.env.MAILEROO_API_URL || DEFAULT_API_URL;
 
   if (!apiKey) {

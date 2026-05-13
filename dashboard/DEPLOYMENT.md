@@ -60,7 +60,7 @@ key is set; the next 5-min tick rehydrates them.
 
 ```bash
 MAILEROO_API_KEY=mlr_...
-MAILEROO_FROM=jeremiah@getbizsuite.com
+MAILEROO_FROM=info@getbizsuite.com
 MAILEROO_API_URL=https://smtp.maileroo.com/api/v2/emails
 ```
 

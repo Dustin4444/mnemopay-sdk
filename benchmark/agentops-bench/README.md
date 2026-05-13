@@ -158,4 +158,4 @@ Maintainers run a spot check before merging. Everything is under Apache 2.0; by 
 
 ---
 
-License: Apache 2.0. Maintainer: Jerry Omiagbo (jeremiah@getbizsuite.com).
+License: Apache 2.0. Maintainer: Jeremiah Omiagbo (info@getbizsuite.com).

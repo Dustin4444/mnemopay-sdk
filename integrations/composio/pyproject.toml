@@ -9,7 +9,7 @@ description = "MnemoPay actions for Composio — persistent memory + micropaymen
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
-authors = [{name = "Jerry Omiagbo", email = "jeremiah@getbizsuite.com"}]
+authors = [{name = "Jeremiah Omiagbo", email = "info@getbizsuite.com"}]
 keywords = ["composio", "mnemopay", "memory", "payments", "mcp", "ai-agents"]
 dependencies = ["composio-core>=0.6.0"]
 

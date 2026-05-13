@@ -74,5 +74,5 @@ Raising **$[TBD]** at **$[TBD] post-money**.
 
 ## Contact
 
-**Jerry Omiagbo** · Founder · J&B Enterprise LLC (Texas)
-jeremiah@getbizsuite.com · cal.com/jeremiah-bizsuite · github.com/mnemopay/mnemopay-sdk
+**Jeremiah Omiagbo** · Founder · J&B Enterprise LLC (Texas)
+info@getbizsuite.com · cal.com/jeremiah-bizsuite · github.com/mnemopay/mnemopay-sdk

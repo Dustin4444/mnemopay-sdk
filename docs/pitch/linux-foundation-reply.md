@@ -67,7 +67,7 @@ Thanks again,
 
 Jerry
 Founder, MnemoPay (J&B Enterprise LLC · Dallas, TX)
-jeremiah@getbizsuite.com
+info@getbizsuite.com
 Repo: github.com/mnemopay/mnemopay-sdk
 Proposal: github.com/aaif/project-proposals/issues/5
 
