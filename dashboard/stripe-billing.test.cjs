@@ -39,6 +39,25 @@ async function main() {
   const portal = await client.createPortalSession({ customer: 'cus_123', returnUrl: 'https://app.example/billing' });
   assert.strictEqual(portal.id, 'bps_test');
   assert.strictEqual(calls[2].path, '/v1/billing_portal/sessions');
+
+  // retrieveCheckoutSession — hits GET /v1/checkout/sessions/:id.
+  // /thanks.html relies on this when the success_url redirect lands before
+  // the checkout.session.completed webhook does.
+  const retrieveCalls = [];
+  const retrieveClient = createStripeBillingClient({
+    secretKey: 'sk_test_x',
+    env: {},
+    requester: async (method, path) => {
+      retrieveCalls.push({ method, path });
+      return { id: 'cs_retrieve_test', payment_status: 'paid', client_reference_id: 'acct_1' };
+    },
+  });
+  const retrieved = await retrieveClient.retrieveCheckoutSession('cs_retrieve_test');
+  assert.strictEqual(retrieved.id, 'cs_retrieve_test');
+  assert.strictEqual(retrieveCalls[0].method, 'GET');
+  assert.strictEqual(retrieveCalls[0].path, '/v1/checkout/sessions/cs_retrieve_test');
+
+  await assert.rejects(() => retrieveClient.retrieveCheckoutSession(''), /sessionId required/);
 }
 
 main().catch((err) => {
