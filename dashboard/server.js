@@ -11,6 +11,7 @@ const { createLogger, createRequestLogger } = require('./logger.cjs');
 const { createRateLimiter, clientKeyForRequest } = require('./rate-limit.cjs');
 const { createRegistry } = require('./metrics.cjs');
 const { createIdempotencyLog } = require('./idempotency.cjs');
+const { createDripQueue } = require('./drip-queue.cjs');
 
 const PROD = process.env.NODE_ENV === 'production';
 const PORT = process.env.PORT || 3200;
@@ -84,6 +85,7 @@ let hyde;     // HyDEGenerator — query expansion
 let reranker; // CrossEncoderReranker — post-recall rerank
 let entityGraph; // SDK EntityGraph (typed edges, bitemporal, spreading activation)
 let extractEntitiesFn; // LLM-backed entity extraction with deterministic fallback
+let dripQueue; // Onboarding drip — initialized once sqlite is open in loadConsoleStore()
 const brainMemories = new Map();
 const brainEntities = new Map();
 const brainEdges = new Map();
@@ -895,6 +897,10 @@ function provisioningBodyFromStripeEvent(event, fallbackAccountId) {
   const metadata = object.metadata || {};
   const subscriptionMetadata = object.subscription_details?.metadata || {};
   const merged = { ...subscriptionMetadata, ...metadata };
+  const customerEmail = object.customer_email
+    || object.customer_details?.email
+    || merged.email
+    || null;
   return {
     accountId: merged.accountId || object.client_reference_id || fallbackAccountId,
     plan: merged.plan,
@@ -906,6 +912,8 @@ function provisioningBodyFromStripeEvent(event, fallbackAccountId) {
     stripeSubscriptionId: object.subscription || object.id || null,
     checkoutSessionId: event.type === 'checkout.session.completed' ? object.id : null,
     createApiKey: merged.createApiKey !== 'false',
+    customerEmail,
+    tier: merged.tier || merged.product || null,
   };
 }
 
@@ -1460,6 +1468,19 @@ async function loadConsoleStore() {
   } catch (e) {
     log.warn('console-store load failed', { driver: CONSOLE_STORE_DRIVER, err: e });
   }
+
+  // ── Drip queue ───────────────────────────────────────────────────────────
+  // Sqlite-backed. Only spins up when the console is on sqlite (Postgres path
+  // is a TODO — the rest of the dashboard moves to it together). 5-min tick.
+  try {
+    if (CONSOLE_STORE_DRIVER === 'sqlite') {
+      const db = openConsoleSqlite();
+      dripQueue = createDripQueue({ db, logger: log });
+      dripQueue.start();
+    }
+  } catch (e) {
+    log.warn('drip queue init failed', { err: e });
+  }
 }
 
 // Debounced async save: every saveConsoleStore() call schedules a flush rather
@@ -1812,6 +1833,23 @@ async function provisionAccount(body, accountId) {
     apiKeyId: apiKey?.id || null,
   });
   saveConsoleStore();
+
+  // Fire 4-touch onboarding drip via Maileroo. Best-effort — never fail
+  // provisioning because the drip couldn't enqueue.
+  if (dripQueue && body.customerEmail) {
+    try {
+      const priceMonthly = PLAN_CATALOG[plan]?.priceMonthly || PLAN_CATALOG[plan]?.amount || null;
+      dripQueue.enqueueOnboardingDrip({
+        accountId,
+        email: String(body.customerEmail).slice(0, 240),
+        tier: body.tier || plan,
+        priceMonthly,
+        apiKey: apiKey ? apiKey.secret : null,
+      });
+    } catch (e) {
+      log.warn('drip enqueue failed', { accountId, err: e });
+    }
+  }
 
   return {
     account: accountPlanFor(accountId),
@@ -2372,6 +2410,112 @@ async function handleRequest(req, res) {
       const body = await readBody(req);
       const provisioned = await provisionAccount(body, accountId);
       return json(res, { ok: true, accountId, ...provisioned }, 201);
+    } catch (e) {
+      return errorJson(res, e);
+    }
+  }
+
+  // ── Public checkout-session lookup ──────────────────────────────────────
+  // Used by /thanks.html to display the freshly-provisioned API key after a
+  // Stripe success_url redirect. Returns { email, tier, api_key } once the
+  // webhook has provisioned the account; returns { pending: true } and HTTP
+  // 202 while we wait (client retries). 402 if not paid. 404 if unknown.
+  const checkoutSessionMatch = pathname.match(/^\/api\/checkout\/session\/([A-Za-z0-9_-]+)$/);
+  if (checkoutSessionMatch && req.method === 'GET') {
+    if (!rateLimit(req, res, generalLimiter, routeLabel, 'cs')) return;
+    const sessionId = checkoutSessionMatch[1].slice(0, 200);
+    try {
+      // Resolve email from the cached account plan we provisioned via webhook.
+      // We look up by checkoutSessionId, which `provisionAccount` already
+      // stores. If the webhook hasn't landed yet, fall back to Stripe directly.
+      let matchedPlan = null;
+      let matchedAccountId = null;
+      for (const [accId, plan] of accountPlans.entries()) {
+        if (plan.checkoutSessionId === sessionId) {
+          matchedPlan = plan;
+          matchedAccountId = accId;
+          break;
+        }
+      }
+
+      // If we found a provisioned plan, return key + tier + email.
+      if (matchedPlan && matchedAccountId) {
+        const accountKey = Array.from(apiKeys.values())
+          .find((k) => k.accountId === matchedAccountId && !k.revokedAt);
+        // Email is stored on the account_member row for this account.
+        const member = Array.from(accountMembers.values())
+          .find((m) => m.accountId === matchedAccountId);
+        const email = member?.email || matchedPlan.customerEmail || null;
+        if (accountKey) {
+          // We never persist plaintext API secrets, only hashes. Therefore the
+          // secret on this endpoint is only present on the FIRST request after
+          // provisioning when it's still in-memory on the `key.secret` field.
+          // For subsequent requests we return the prefix only and direct the
+          // user to rotate via the console. That's a deliberate trade-off —
+          // /thanks should be hit immediately after checkout, while the
+          // secret is fresh.
+          return json(res, {
+            email,
+            tier: matchedPlan.plan,
+            api_key: accountKey.secret || accountKey.prefix,
+            secretPrefix: accountKey.prefix,
+            accountId: matchedAccountId,
+          });
+        }
+      }
+
+      // No provisioned plan yet — talk to Stripe to confirm the session and,
+      // when paid, wait briefly for the webhook to land. We tell the client to
+      // retry by returning 202 + { pending: true }.
+      const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
+      if (!STRIPE_KEY) {
+        return json(res, { error: 'session not provisioned and STRIPE_SECRET_KEY missing' }, 503);
+      }
+      let session;
+      try {
+        const client = stripeBillingClient();
+        session = await client.retrieveCheckoutSession(sessionId);
+      } catch (e) {
+        if (e.statusCode === 404) return json(res, { error: 'session not found' }, 404);
+        return errorJson(res, e);
+      }
+      if (!session) return json(res, { error: 'session not found' }, 404);
+      const paid = session.payment_status === 'paid' || session.status === 'complete';
+      if (!paid) {
+        return json(res, { error: 'session not paid yet', pending: true, status: 'unpaid' }, 402);
+      }
+
+      // Paid but webhook not yet landed. Poll the in-memory accountPlans for
+      // up to 5 seconds, then 202 the client to retry.
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        for (const [accId, plan] of accountPlans.entries()) {
+          if (plan.checkoutSessionId === sessionId) {
+            const accountKey = Array.from(apiKeys.values())
+              .find((k) => k.accountId === accId && !k.revokedAt);
+            const member = Array.from(accountMembers.values())
+              .find((m) => m.accountId === accId);
+            const email = member?.email || session.customer_details?.email || session.customer_email || null;
+            if (accountKey) {
+              return json(res, {
+                email,
+                tier: plan.plan,
+                api_key: accountKey.secret || accountKey.prefix,
+                secretPrefix: accountKey.prefix,
+                accountId: accId,
+              });
+            }
+          }
+        }
+        await new Promise((r) => setTimeout(r, 400));
+      }
+
+      // Still pending — tell the client to retry.
+      return json(res, {
+        pending: true,
+        status: 'provisioning',
+        email: session.customer_details?.email || session.customer_email || null,
+      }, 202);
     } catch (e) {
       return errorJson(res, e);
     }

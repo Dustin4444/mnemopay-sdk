@@ -126,10 +126,18 @@ function createStripeBillingClient({ secretKey, env = process.env, requester } =
     });
   }
 
+  // Retrieve a checkout session by id. Used by /api/checkout/session/:id so
+  // /thanks.html can hand the user their freshly-provisioned API key.
+  async function retrieveCheckoutSession(sessionId) {
+    if (!sessionId) throw new Error('sessionId required');
+    return request('GET', `/v1/checkout/sessions/${encodeURIComponent(sessionId)}`, {});
+  }
+
   return {
     createCheckoutSession,
     createPortalSession,
     resolvePriceId,
+    retrieveCheckoutSession,
   };
 }
 

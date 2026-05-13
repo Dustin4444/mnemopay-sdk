@@ -1,0 +1,38 @@
+{
+  "insurance": {
+    "name": "GridStamp Insurance Pilot",
+    "priceMonthly": 5000,
+    "currency": "usd",
+    "termMonths": 3,
+    "stripeProductId": "prod_UVSWhLVV2GqhsC",
+    "stripePriceId": "price_1TWRbm2ME7USiFirmYGBWzZz",
+    "stripePaymentLinkId": "plink_1TWRcy2ME7USiFiremete7g7",
+    "stripePaymentLinkUrl": "https://buy.stripe.com/28E3co4rx2yPbyMbd9bo40A",
+    "audience": "AV & robotics underwriters",
+    "description": "Cryptographic dispute evidence. SHA-256 proof chains, HMAC-signed frames, 100% replay detection."
+  },
+  "logistics": {
+    "name": "GridStamp Logistics Pilot",
+    "priceMonthly": 2500,
+    "currency": "usd",
+    "termMonths": 3,
+    "stripeProductId": "prod_UVSWuLth8Z6O9u",
+    "stripePriceId": "price_1TWRbt2ME7USiFiroJFCOptl",
+    "stripePaymentLinkId": "plink_1TWRdG2ME7USiFirUK9lQJNY",
+    "stripePaymentLinkUrl": "https://buy.stripe.com/9B6fZaf6b6P5gT6dlhbo40B",
+    "audience": "Visibility platforms & freight",
+    "description": "Cryptographic proof-of-delivery. Tamper-evident receipts shippers can verify offline."
+  },
+  "gaming": {
+    "name": "GridStamp Gaming/AR Pilot",
+    "priceMonthly": 2500,
+    "currency": "usd",
+    "termMonths": 3,
+    "stripeProductId": "prod_UVSW3zMFuyJkSM",
+    "stripePriceId": "price_1TWRc12ME7USiFirvAHI6QHV",
+    "stripePaymentLinkId": "plink_1TWRdV2ME7USiFir2VaXn6hH",
+    "stripePaymentLinkUrl": "https://buy.stripe.com/8x28wIgafddt5ao3KHbo40C",
+    "audience": "AR & location-based apps",
+    "description": "GPS-spoof detection. 91% spoof detection at <0.5% false-positive rate."
+  }
+}

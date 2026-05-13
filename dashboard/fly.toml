@@ -24,6 +24,8 @@ primary_region = 'dfw'
   MNEMOPAY_CONSOLE_SQLITE = '/data/console-store.sqlite'
   NODE_ENV = 'production'
   MNEMOPAY_LOG_LEVEL = 'info'
+  # CORS allowlist for /api/checkout/session/:id called by mnemopay.com/thanks.
+  MNEMOPAY_CORS_ALLOWLIST = 'https://mnemopay.com,https://www.mnemopay.com'
 
 [[mounts]]
   source = 'mnemopay_console_data'
