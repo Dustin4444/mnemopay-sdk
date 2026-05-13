@@ -52,6 +52,27 @@ RESEND_API_KEY=re_...
 MNEMOPAY_AUTH_EMAIL_FROM="MnemoPay <login@mnemopay.com>"
 ```
 
+## Maileroo env (onboarding drip after Stripe provisioning)
+
+Required for the 4-touch drip in `dashboard/drip-queue.cjs`. Without these the
+drip schedules normally but every send marks the row as `deferred` until the
+key is set; the next 5-min tick rehydrates them.
+
+```bash
+MAILEROO_API_KEY=mlr_...
+MAILEROO_FROM=jeremiah@getbizsuite.com
+MAILEROO_API_URL=https://smtp.maileroo.com/api/v2/emails
+```
+
+Sender domain must be verified at app.maileroo.com (currently
+`getbizsuite.com`).
+
+Optional knob — drip tick interval (default 5 min):
+
+```bash
+MNEMOPAY_DRIP_TICK_MS=300000
+```
+
 ## Fly deploy
 
 From `dashboard/`:
@@ -93,6 +114,12 @@ MNEMOPAY_SAVE_DEBOUNCE_MS=250
 
 # Log level: debug | info | warn | error.
 MNEMOPAY_LOG_LEVEL=info
+
+# Brain bridge — see root .env.example for the response-format note. Setting
+# this changes the shape of MCP `recall` responses when the brain produces
+# hits. Leave unset on the dashboard host unless you intend the dashboard's
+# embedded MCP server to bleed a shared corpus into per-agent recall.
+MNEMOPAY_BRAIN_PATH=/data/brain.db
 ```
 
 ## Health & observability
