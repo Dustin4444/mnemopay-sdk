@@ -400,7 +400,17 @@ function applySecurityHeaders(res, { html = false } = {}) {
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
   if (PROD) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   if (html) {
-    res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'");
+    // Dashboard HTML embeds Tailwind + React/Babel from CDN (see index.html).
+    // CSP must allow those origins or the page renders blank.
+    res.setHeader('Content-Security-Policy', [
+      "default-src 'self'",
+      "img-src 'self' data: https:",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com data:",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://unpkg.com",
+      "connect-src 'self' https:",
+      "frame-ancestors 'none'",
+    ].join('; '));
   }
 }
 
