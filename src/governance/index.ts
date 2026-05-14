@@ -32,3 +32,48 @@ export type {
   GridStampSpatialProof,
   GridStampSplatEvidence,
 } from "./spatial.js";
+
+// Sub-second policy enforcement (EU AI Act + sector rules).
+export {
+  compilePolicy,
+  evaluateAction,
+  InMemoryRateCounter,
+} from "./policy.js";
+export type {
+  Policy,
+  PolicyRule,
+  PolicyAction,
+  PolicyVerdict,
+  CompiledPolicy,
+  EvaluateOptions,
+  RateWindow,
+} from "./policy.js";
+
+export { lintPolicy } from "./policy-lint.js";
+export type { LintIssue, LintReport } from "./policy-lint.js";
+
+export { defaultEuAiActPolicy, EU_AI_ACT_POLICY_V1 } from "./policies/eu-ai-act.js";
+
+export { InMemoryApprovalStore, routeVerdict } from "./approval.js";
+export type {
+  ApprovalRequest,
+  ApprovalStatus,
+  ApprovalStore,
+} from "./approval.js";
+
+export type { RateCounter, RateCounterAdapter } from "./rate-counter.js";
+
+// Shared event-stream audit chain — used by mnemopay-code, mnemopay-browser,
+// and the MCP Gateway for Article 12 bundle export.
+export {
+  AuditChain,
+  verifyBundle,
+  canonicalize as canonicalizeJson,
+  sha256Hex,
+} from "./audit-chain.js";
+export type {
+  ChainEvent,
+  ChainBundle,
+  ChainSinkOptions,
+  VerifyBundleOptions,
+} from "./audit-chain.js";
