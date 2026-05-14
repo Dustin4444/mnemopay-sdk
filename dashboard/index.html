@@ -1128,7 +1128,21 @@ function Dashboard() {
             <p className="text-xs text-gray-500">Brain, wallet, and audit trail for AI agents {lastUpdate ? `| Updated ${lastUpdate.toLocaleTimeString()}` : ''}</p>
           </div>
         </div>
-        <ConnectionIndicator connected={connected} />
+        <div className="flex items-center gap-3">
+          {session?.authenticated ? (
+            <div className="text-right">
+              <div className="text-xs text-gray-500 uppercase tracking-wider">Signed in as</div>
+              <div className="text-sm font-mono text-white">{sanitize(session.session?.email || '—')}</div>
+              <div className="text-[10px] text-gray-500 font-mono">account: {sanitize(session.session?.accountId || accountId)}</div>
+            </div>
+          ) : (
+            <div className="text-right">
+              <div className="text-xs text-amber-400 uppercase tracking-wider">Not signed in</div>
+              <div className="text-[10px] text-gray-500 font-mono">account: {sanitize(accountId)} (anonymous)</div>
+            </div>
+          )}
+          <ConnectionIndicator connected={connected} />
+        </div>
       </div>
 
       {/* Stats Row */}
