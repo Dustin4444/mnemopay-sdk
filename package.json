@@ -30,6 +30,10 @@
       "import": "./dist/recall/engine.js",
       "types": "./dist/recall/engine.d.ts"
     },
+    "./identity": {
+      "import": "./dist/identity/index.js",
+      "types": "./dist/identity/index.d.ts"
+    },
     "./rails": {
       "import": "./dist/rails/index.js",
       "types": "./dist/rails/index.d.ts"
