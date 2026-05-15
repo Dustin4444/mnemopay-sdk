@@ -4,6 +4,41 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [1.8.1] — 2026-05-15
+
+Engine-side anchor auto-wire. Closes the deferred item from 1.8.0: anchors
+are now mintable from the `MnemoPayLite.remember()` write path with a
+single setter call. The pure `anchorMemory()` primitive from 1.8.0 still
+works for consumers that prefer manual wiring.
+
+All additive; no breaking changes to the 1.8.0 surface.
+
+### Added
+
+- **`MnemoPayLite.enableAnchoring(wallet, opts?)`** — opt-in setter that
+  enables DID-signed anchor minting on subsequent `remember()` calls.
+  Defaults to auto-mode (every memory gets an anchor); pass `{auto: false}`
+  to require per-call `opts.anchor === true`. Optional `ttl_ms` for anchor
+  expiry and `nonceStore` for downstream verifier replay protection.
+- **`MnemoPayLite.disableAnchoring()`** — flips anchoring off; subsequent
+  `remember()` calls produce un-anchored memories.
+- **`MnemoPayLite.getAnchor(memoryId)`** — retrieve the persisted
+  `MemoryAnchor` for a stored memory.
+- **`Memory.anchor?: MemoryAnchor`** — optional field on the Memory record.
+  Populated when anchoring is enabled at write time. Serializes with the
+  rest of the memory (survives `_saveToDisk` / `_loadFromStorage`).
+- **`RememberOptions.anchor?: boolean`** — per-call opt-in/out. `true`
+  force-mints; `false` force-skips even when auto-mode is on.
+- **`RememberOptions.gridstamp?: GridStampSpatialProof`** — optional
+  spatial-proof envelope included in the signed payload (cannot be
+  swapped post-mint).
+
+### Tests
+
+- 7 new specs covering: anchoring-off default; auto-mint on; sequence
+  monotonic increment; manual-mode opt-in; per-call force-skip;
+  round-trip verifyAnchor; disableAnchoring stops minting.
+
 ## [1.8.0] — 2026-05-15
 
 Native-shift Stage 1 promoted to stable. Recall + GridStamp anchor and the

@@ -7,6 +7,7 @@ import {
   InMemoryNonceStore,
 } from "../src/recall/anchor.js";
 import type { GridStampSpatialProof } from "../src/governance/spatial.js";
+import MnemoPay from "../src/index.js";
 
 function fixedDate(): Date {
   return new Date("2026-05-14T12:00:00.000Z");
@@ -283,5 +284,78 @@ describe("GridStamp spatial-proof envelope", () => {
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("bad_signature");
+  });
+});
+
+describe("MnemoPayLite.enableAnchoring (v1.8.1 auto-wire)", () => {
+  it("remember() leaves memory.anchor undefined when anchoring is off", async () => {
+    const agent = MnemoPay.quick("anchor-off");
+    const id = await agent.remember("plain memory");
+    expect(agent.getAnchor(id)).toBeUndefined();
+  });
+
+  it("enableAnchoring() auto-mints anchors on subsequent remember()", async () => {
+    const agent = MnemoPay.quick("anchor-on");
+    const wallet = Wallet.create();
+    agent.enableAnchoring(wallet);
+    const id = await agent.remember("anchored memory");
+    const anchor = agent.getAnchor(id);
+    expect(anchor).toBeDefined();
+    expect(anchor!.did).toBe(wallet.did);
+    expect(anchor!.memory_id).toBe(id);
+    expect(anchor!.sequence).toBe(0);
+    expect(anchor!.signature).toMatch(/^[0-9a-f]+$/);
+  });
+
+  it("anchor sequence increments per remember() call", async () => {
+    const agent = MnemoPay.quick("anchor-seq");
+    agent.enableAnchoring(Wallet.create());
+    const id1 = await agent.remember("first");
+    const id2 = await agent.remember("second");
+    const id3 = await agent.remember("third");
+    expect(agent.getAnchor(id1)!.sequence).toBe(0);
+    expect(agent.getAnchor(id2)!.sequence).toBe(1);
+    expect(agent.getAnchor(id3)!.sequence).toBe(2);
+  });
+
+  it("enableAnchoring({auto:false}) only mints when per-call opts.anchor === true", async () => {
+    const agent = MnemoPay.quick("anchor-manual");
+    agent.enableAnchoring(Wallet.create(), { auto: false });
+    const id1 = await agent.remember("not anchored");
+    const id2 = await agent.remember("anchored", { anchor: true });
+    expect(agent.getAnchor(id1)).toBeUndefined();
+    expect(agent.getAnchor(id2)).toBeDefined();
+  });
+
+  it("opts.anchor === false force-skips even when auto-mode is on", async () => {
+    const agent = MnemoPay.quick("anchor-skip");
+    agent.enableAnchoring(Wallet.create());
+    const id = await agent.remember("skip me", { anchor: false });
+    expect(agent.getAnchor(id)).toBeUndefined();
+  });
+
+  it("anchor binds to the exact content via verifyAnchor", async () => {
+    const agent = MnemoPay.quick("anchor-verify");
+    const wallet = Wallet.create();
+    agent.enableAnchoring(wallet);
+    const id = await agent.remember("the secret is 42");
+    const anchor = agent.getAnchor(id)!;
+    const r = verifyAnchor({
+      anchor,
+      content: "the secret is 42",
+      publicKey: wallet.publicKey,
+      verify: (did, sig, payload, pk) => wallet.verify(did, sig, payload, pk),
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("disableAnchoring() stops minting on subsequent remember()", async () => {
+    const agent = MnemoPay.quick("anchor-disable");
+    agent.enableAnchoring(Wallet.create());
+    const id1 = await agent.remember("on");
+    agent.disableAnchoring();
+    const id2 = await agent.remember("off");
+    expect(agent.getAnchor(id1)).toBeDefined();
+    expect(agent.getAnchor(id2)).toBeUndefined();
   });
 });

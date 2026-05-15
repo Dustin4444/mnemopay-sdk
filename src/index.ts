@@ -20,6 +20,9 @@ import { IdentityRegistry, constantTimeEqual, type AgentIdentity, type Capabilit
 import { AdaptiveEngine, type AdaptiveConfig, type AgentInsight, type BusinessMetrics, type AdaptationRecord } from "./adaptive.js";
 import { formatForClaudeCache, serializeMemoriesForCache, type ClaudeCacheBlock, type FormatForClaudeCacheOptions } from "./claude-cache.js";
 import { SubagentCostTracker } from "./subagent-cost.js";
+import { anchorMemory, type MemoryAnchor, type NonceStore } from "./recall/anchor.js";
+import type { Wallet } from "./identity/wallet.js";
+import type { GridStampSpatialProof } from "./governance/spatial.js";
 
 // ─── Module-level exit-hook registry ──────────────────────────────────────
 // One set of process listeners shared across every MnemoPay instance so
@@ -158,6 +161,11 @@ export interface Memory {
    * entity-extraction + graph-ingest write path. Used to key observations and
    * to detect overlap for opinion reinforcement. */
   entityIds?: string[];
+  /** Portable DID-signed receipt for this memory. Present only when anchoring
+   * was enabled at write time via {@link MnemoPayLite.enableAnchoring}, or
+   * explicitly opted-in per-call via `RememberOptions.anchor === true`.
+   * Pure metadata — verification still goes through `verifyAnchor()`. */
+  anchor?: MemoryAnchor;
 }
 
 export interface RememberOptions {
@@ -170,6 +178,14 @@ export interface RememberOptions {
   confidence?: number;
   /** Canonical entity IDs this memory is about (if known by the caller). */
   entityIds?: string[];
+  /** Force-mint a MemoryAnchor for this call even when instance-level
+   * anchoring is off, OR force-skip (false) when it would otherwise mint.
+   * Requires a wallet on the instance (via `enableAnchoring`) when set true. */
+  anchor?: boolean;
+  /** Optional GridStamp spatial-proof envelope. Included in the signed
+   * anchor payload so it cannot be swapped post-mint. Ignored when no
+   * anchor is being minted. */
+  gridstamp?: GridStampSpatialProof;
 }
 
 export interface Transaction {
@@ -438,6 +454,12 @@ export class MnemoPayLite extends EventEmitter {
   private _chargeCounter: number = 0;
   /** True when a persistence layer (disk or storage adapter) is active. Skips audit+emit overhead when false. */
   private _hasPersist: boolean = false;
+  /** Anchoring config. `null` when off. Set via {@link enableAnchoring}. */
+  private _anchorWallet: Wallet | null = null;
+  private _anchorAuto: boolean = false;
+  private _anchorSequence: number = 0;
+  private _anchorTtlMs: number | undefined = undefined;
+  private _anchorNonceStore: NonceStore | undefined = undefined;
   /**
    * Shared construction-time Date for non-persist transactions.
    * One Date per agent instance instead of one per transaction — saves
@@ -861,6 +883,47 @@ export class MnemoPayLite extends EventEmitter {
 
   // ── Memory Methods ──────────────────────────────────────────────────────
 
+  /**
+   * Enable DID-signed anchoring on this agent's `remember()` write path.
+   *
+   * Once enabled, every subsequent `remember()` call mints a portable
+   * {@link MemoryAnchor} and attaches it to `Memory.anchor`. The anchor is
+   * a content commitment (SHA-256) signed by `wallet`'s Ed25519 key plus
+   * replay defenses (monotonic per-instance sequence, 128-bit nonce, TTL).
+   *
+   * @param wallet Wallet that signs the anchors. Holds the DID + Ed25519 key.
+   * @param opts.auto Set false to require per-call `opts.anchor === true`.
+   *   Default true — every remember() auto-mints once enabled.
+   * @param opts.ttl_ms Anchor TTL in milliseconds. Default 30 days.
+   * @param opts.nonceStore Optional replay-protection nonce store. The
+   *   anchor module never *requires* one to mint (it's a verify-time
+   *   concern), but downstream verifyAnchor calls can re-use it.
+   */
+  enableAnchoring(
+    wallet: Wallet,
+    opts?: { auto?: boolean; ttl_ms?: number; nonceStore?: NonceStore }
+  ): void {
+    if (!wallet) throw new Error("enableAnchoring: wallet required");
+    this._anchorWallet = wallet;
+    this._anchorAuto = opts?.auto !== false;
+    this._anchorTtlMs = opts?.ttl_ms;
+    this._anchorNonceStore = opts?.nonceStore;
+    this.log(`Anchoring enabled (did=${wallet.did.slice(0, 22)}…, auto=${this._anchorAuto})`);
+  }
+
+  /** Disable anchoring. Subsequent `remember()` calls produce un-anchored memories. */
+  disableAnchoring(): void {
+    this._anchorWallet = null;
+    this._anchorAuto = false;
+    this._anchorTtlMs = undefined;
+    this._anchorNonceStore = undefined;
+  }
+
+  /** Retrieve the persisted anchor for a memory id, if one was minted. */
+  getAnchor(memoryId: string): MemoryAnchor | undefined {
+    return this.memories.get(memoryId)?.anchor;
+  }
+
   async remember(content: string, opts?: RememberOptions): Promise<string> {
     if (!content || typeof content !== "string") throw new Error("Memory content is required");
     if (content.length > 100_000) throw new Error("Memory content exceeds 100KB limit");
@@ -898,6 +961,27 @@ export class MnemoPayLite extends EventEmitter {
       entityIds,
     };
     this.memories.set(mem.id, mem);
+
+    // Anchor mint — only when enableAnchoring() ran and either auto-mode is
+    // on OR this call opted in explicitly. Per-call `opts.anchor === false`
+    // force-skips even when auto is on.
+    const wantAnchor =
+      this._anchorWallet !== null &&
+      opts?.anchor !== false &&
+      (this._anchorAuto || opts?.anchor === true);
+    if (wantAnchor) {
+      if (!this._anchorWallet) {
+        throw new Error("remember(): anchor opt-in requested but no wallet — call enableAnchoring() first");
+      }
+      mem.anchor = anchorMemory({
+        memory_id: mem.id,
+        content: safeContent,
+        wallet: this._anchorWallet,
+        sequence: this._anchorSequence++,
+        ttl_ms: this._anchorTtlMs,
+        gridstamp: opts?.gridstamp,
+      });
+    }
 
     // Generate embedding if using vector/hybrid recall
     if (this.recallEngine.strategy !== "score") {
