@@ -1151,6 +1151,28 @@ function accountIdForRequest(req) {
   return String(Array.isArray(headerAccount) ? headerAccount[0] : headerAccount || DEFAULT_ACCOUNT_ID).slice(0, 120);
 }
 
+// Stricter sibling: returns the account ONLY if the caller authenticated
+// via a valid Bearer API key or a signed session cookie. Throws 401 when
+// neither is present. Use this on destructive / irreversible endpoints
+// where falling through to DEFAULT_ACCOUNT_ID would let an unauthenticated
+// caller act on the dev/default account.
+function authenticatedAccountIdForRequest(req) {
+  const auth = String(req.headers.authorization || '');
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (m?.[1]) {
+    const keyHash = hashSecret(m[1].trim());
+    const key = Array.from(apiKeys.values()).find((k) => k.keyHash === keyHash && !k.revokedAt);
+    if (key) {
+      key.lastUsedAt = new Date().toISOString();
+      saveConsoleStore();
+      return key.accountId;
+    }
+  }
+  const session = sessionForRequest(req);
+  if (session?.accountId) return session.accountId;
+  throw Object.assign(new Error('authentication required'), { status: 401 });
+}
+
 function openConsoleSqlite() {
   if (consoleSqlite) return consoleSqlite;
   // Optional dependency already ships with the SDK. JSON remains the default dev store.
@@ -2586,9 +2608,18 @@ async function handleRequest(req, res) {
   // memories/entities/edges, members, console sessions, auth challenges,
   // plan record, and (best-effort) cancels Stripe subscriptions.
   // Idempotent: calling twice on a deleted account is a no-op.
+  // Hardened: requires Bearer API key or signed session cookie. Refuses to
+  // delete the DEFAULT account (shared dev/fallback identity) — that one
+  // must be cleaned up via direct DB access, not the HTTP surface.
   if (pathname === '/api/v1/account' && req.method === 'DELETE') {
     try {
-      const accountId = accountIdForRequest(req);
+      const accountId = authenticatedAccountIdForRequest(req);
+      if (accountId === DEFAULT_ACCOUNT_ID) {
+        return errorJson(res, Object.assign(
+          new Error('cannot delete the default account via the HTTP surface'),
+          { status: 403, details: { accountId } }
+        ));
+      }
       const before = {
         apiKeys: 0, memories: 0, entities: 0, edges: 0,
         sessions: 0, challenges: 0, members: 0,
