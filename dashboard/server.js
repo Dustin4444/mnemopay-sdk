@@ -377,6 +377,109 @@ function errorJson(res, e, fallbackStatus = 400) {
   return json(res, { ok: false, error: e.message, details: e.details || undefined }, status);
 }
 
+// ── Sign in with Apple — JWT verification helpers ──────────────────────────
+// Verifies the identity-token returned by AppleAuthentication.signInAsync()
+// against Apple's published JWKS. Requires no external library — uses
+// node:crypto JWK key import (Node ≥ 16) and the raw HTTPS fetch.
+//
+// Required env:
+//   APPLE_SERVICES_ID — your Services ID (audience claim). Configure in
+//     Apple Developer portal → Identifiers → Services IDs. Same value as
+//     the Sign in with Apple "Identifier" field, e.g. "com.mnemopay.signin".
+//   APPLE_TEAM_ID — your Apple Team ID (optional, only used for logging).
+const APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys';
+const APPLE_ISSUER = 'https://appleid.apple.com';
+let _appleJwksCache = null; // { fetchedAt: number, keys: Array<jwk> }
+const APPLE_JWKS_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+async function fetchAppleJwks() {
+  if (_appleJwksCache && Date.now() - _appleJwksCache.fetchedAt < APPLE_JWKS_TTL_MS) {
+    return _appleJwksCache.keys;
+  }
+  const data = await new Promise((resolve, reject) => {
+    const https = require('node:https');
+    const req = https.get(APPLE_JWKS_URL, (res) => {
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error(`apple jwks ${res.statusCode}`)); }
+      let buf = '';
+      res.on('data', (c) => { buf += c; });
+      res.on('end', () => { try { resolve(JSON.parse(buf)); } catch (e) { reject(e); } });
+    });
+    req.on('error', reject);
+    req.setTimeout(5000, () => { req.destroy(new Error('apple jwks timeout')); });
+  });
+  if (!Array.isArray(data?.keys)) throw new Error('apple jwks: malformed response');
+  _appleJwksCache = { fetchedAt: Date.now(), keys: data.keys };
+  return data.keys;
+}
+
+function b64UrlToBuf(s) {
+  return Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+}
+
+async function verifyAppleIdentityToken(identityToken, { appleUserId } = {}) {
+  if (!identityToken || typeof identityToken !== 'string') {
+    throw Object.assign(new Error('identityToken required'), { status: 400 });
+  }
+  const parts = identityToken.split('.');
+  if (parts.length !== 3) throw Object.assign(new Error('malformed JWT'), { status: 400 });
+
+  let header, payload;
+  try {
+    header = JSON.parse(b64UrlToBuf(parts[0]).toString('utf8'));
+    payload = JSON.parse(b64UrlToBuf(parts[1]).toString('utf8'));
+  } catch {
+    throw Object.assign(new Error('JWT header/payload not JSON'), { status: 400 });
+  }
+
+  if (header.alg !== 'RS256') {
+    throw Object.assign(new Error(`unsupported JWT alg ${header.alg}`), { status: 400 });
+  }
+  if (payload.iss !== APPLE_ISSUER) {
+    throw Object.assign(new Error('JWT iss not apple'), { status: 401 });
+  }
+  const expectedAud = process.env.APPLE_SERVICES_ID;
+  if (expectedAud && payload.aud !== expectedAud) {
+    throw Object.assign(new Error('JWT aud mismatch'), { status: 401, details: { aud: payload.aud } });
+  }
+  if (!expectedAud) {
+    // Soft warning — accept but log. Strongly recommend setting APPLE_SERVICES_ID in prod.
+    console.warn('[apple-auth] APPLE_SERVICES_ID not set — accepting aud=' + payload.aud + ' unverified');
+  }
+  if (typeof payload.exp === 'number' && payload.exp * 1000 < Date.now()) {
+    throw Object.assign(new Error('JWT expired'), { status: 401 });
+  }
+  if (appleUserId && payload.sub !== appleUserId) {
+    throw Object.assign(new Error('JWT sub does not match supplied appleUserId'), { status: 401 });
+  }
+
+  const jwks = await fetchAppleJwks();
+  const jwk = jwks.find((k) => k.kid === header.kid);
+  if (!jwk) throw Object.assign(new Error(`apple JWK kid ${header.kid} not found`), { status: 401 });
+
+  const publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+  const message = Buffer.from(parts[0] + '.' + parts[1], 'utf8');
+  const signature = b64UrlToBuf(parts[2]);
+  const verified = crypto.verify('RSA-SHA256', message, publicKey, signature);
+  if (!verified) throw Object.assign(new Error('JWT signature invalid'), { status: 401 });
+
+  return {
+    sub: payload.sub,           // Stable per-Services-ID Apple user id
+    email: payload.email || null,
+    emailVerified: payload.email_verified === 'true' || payload.email_verified === true,
+    isPrivateEmail: payload.is_private_email === 'true' || payload.is_private_email === true,
+    aud: payload.aud,
+    iat: payload.iat,
+    exp: payload.exp,
+  };
+}
+
+function appleAccountIdFor(appleUserSub) {
+  // Stable, account-id-shaped: `apl_<first16of-sub>`. Apple sub is per-Services-ID,
+  // so two installs of the same app reach the same account. Different bundle/Services
+  // IDs intentionally produce different accounts (Apple's design).
+  return 'apl_' + String(appleUserSub).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24);
+}
+
 function resolveCorsOrigin(origin) {
   if (!origin) return null;
   if (CORS_ALLOWLIST.length === 0) return PROD ? null : origin;
@@ -2269,6 +2372,41 @@ async function handleRequest(req, res) {
     }
   }
 
+  // ── Sign in with Apple — POST /api/v1/auth/apple ────────────────────────
+  // Mobile app exchanges Apple's identity-token for a MnemoPay session.
+  // Body: { identityToken, authorizationCode, fullName, email, appleUserId }
+  // Returns: { ok, sessionToken, accountId, session }
+  if (pathname === '/api/v1/auth/apple' && req.method === 'POST') {
+    try {
+      const body = await readBody(req);
+      const verified = await verifyAppleIdentityToken(body.identityToken, {
+        appleUserId: body.appleUserId,
+      });
+      const accountId = appleAccountIdFor(verified.sub);
+      // Apple only returns email/fullName on the FIRST sign-in. Persist them
+      // on session creation so subsequent sign-ins (which omit them) still
+      // have a profile to show.
+      const email = body.email || verified.email || null;
+      const name = (typeof body.fullName === 'string' && body.fullName.trim()) || null;
+      const session = createConsoleSession({ accountId, email, name });
+      setSessionCookie(res, session.id);
+      recordAudit(accountId, 'auth.apple.signin', `session:${session.id}`, {
+        sub: verified.sub.slice(0, 12) + '…',
+        emailVerified: verified.emailVerified,
+        isPrivateEmail: verified.isPrivateEmail,
+      });
+      saveConsoleStore();
+      return json(res, {
+        ok: true,
+        sessionToken: session.id,
+        accountId,
+        session: publicSession(session),
+      }, 201);
+    } catch (e) {
+      return errorJson(res, e);
+    }
+  }
+
   if (pathname === '/api/v1/auth/logout' && req.method === 'POST') {
     const session = sessionForRequest(req);
     if (session) {
@@ -2441,6 +2579,206 @@ async function handleRequest(req, res) {
     const { secret } = key;
     const publicKey = publicApiKey(key);
     return json(res, { ok: true, key: publicKey, secret, warning: 'Store this secret now. MnemoPay will not show it again.' }, 201);
+  }
+
+  // ── Account deletion — Apple guideline 5.1.1(v) + GDPR Article 17 ───────
+  // Cascade-deletes everything tied to this account: API keys, brain
+  // memories/entities/edges, members, console sessions, auth challenges,
+  // plan record, and (best-effort) cancels Stripe subscriptions.
+  // Idempotent: calling twice on a deleted account is a no-op.
+  if (pathname === '/api/v1/account' && req.method === 'DELETE') {
+    try {
+      const accountId = accountIdForRequest(req);
+      const before = {
+        apiKeys: 0, memories: 0, entities: 0, edges: 0,
+        sessions: 0, challenges: 0, members: 0,
+      };
+
+      for (const [id, key] of apiKeys) {
+        if (key.accountId === accountId) { apiKeys.delete(id); before.apiKeys++; }
+      }
+      if (typeof brainMemories?.forEach === 'function') {
+        for (const [id, mem] of brainMemories) {
+          if (mem.accountId === accountId) { brainMemories.delete(id); before.memories++; }
+        }
+      }
+      if (typeof brainEntities?.forEach === 'function') {
+        for (const [id, entity] of brainEntities) {
+          if (entity.accountId === accountId) { brainEntities.delete(id); before.entities++; }
+        }
+      }
+      if (typeof brainEdges?.forEach === 'function') {
+        for (const [id, edge] of brainEdges) {
+          if (edge.accountId === accountId) { brainEdges.delete(id); before.edges++; }
+        }
+      }
+      if (typeof consoleSessions?.forEach === 'function') {
+        for (const [id, session] of consoleSessions) {
+          if (session.accountId === accountId) { consoleSessions.delete(id); before.sessions++; }
+        }
+      }
+      if (typeof authChallenges?.forEach === 'function') {
+        for (const [id, ch] of authChallenges) {
+          if (ch.accountId === accountId) { authChallenges.delete(id); before.challenges++; }
+        }
+      }
+      if (typeof accountMembers?.forEach === 'function') {
+        for (const [id, m] of accountMembers) {
+          if (m.accountId === accountId) { accountMembers.delete(id); before.members++; }
+        }
+      }
+
+      // Best-effort: cancel any active Stripe subscription. Don't fail the
+      // delete if Stripe is down — local data is already gone.
+      try {
+        const billing = accountPlanFor(accountId);
+        const subId = billing?.stripe?.subscriptionId || billing?.subscriptionId;
+        if (subId) {
+          const stripeBilling = require('./stripe-billing.cjs');
+          if (typeof stripeBilling.cancelSubscription === 'function') {
+            await stripeBilling.cancelSubscription(subId);
+          }
+        }
+      } catch (stripeErr) {
+        // Audit but don't fail the delete.
+        recordAudit(accountId, 'account.delete.stripe_warn', `account:${accountId}`, { error: String(stripeErr?.message || stripeErr).slice(0, 200) });
+      }
+
+      // Audit BEFORE removing the plan so the event has a home account.
+      recordAudit(accountId, 'account.deleted', `account:${accountId}`, before);
+
+      // Drop plan record last.
+      if (typeof accountPlans?.delete === 'function') {
+        accountPlans.delete(accountId);
+      }
+
+      saveConsoleStore();
+      clearSessionCookie(res);
+      return json(res, { ok: true, accountId, cascade: before });
+    } catch (e) {
+      return errorJson(res, e);
+    }
+  }
+
+  // ── /agents/summary — Desktop "Activity Monitor for agents" feed ────────
+  // Per-API-key (= per-agent) rollup. Today's USD and anomaly count come
+  // from the audit log filtered by subject prefix `api_key:<id>`. Score +
+  // delta hooks land when per-agent FICO scoring ships.
+  if (pathname === '/agents/summary' && req.method === 'GET') {
+    try {
+      const accountId = accountIdForRequest(req);
+      const accountKeys = Array.from(apiKeys.values()).filter((k) => k.accountId === accountId && !k.revokedAt);
+      const todayStart = new Date();
+      todayStart.setUTCHours(0, 0, 0, 0);
+      const todayMs = todayStart.getTime();
+
+      let todayTotalUsd = 0;
+      const agentsOut = accountKeys.map((key) => {
+        const keySubject = `api_key:${key.id}`;
+        const todayEvents = auditEvents.filter(
+          (e) => e.accountId === accountId &&
+                 e.subject === keySubject &&
+                 new Date(e.createdAt).getTime() >= todayMs
+        );
+        const chargeEvents = todayEvents.filter((e) => e.action === 'charge.created' || e.action === 'charge.settled');
+        const todayUsd = chargeEvents.reduce((sum, e) => sum + (Number(e.details?.amount_usd) || 0), 0);
+        const anomalies = todayEvents.filter((e) => /anomaly|fraud|risk/.test(e.action)).length;
+        todayTotalUsd += todayUsd;
+        return {
+          id: key.id,
+          name: key.name,
+          score: key.fico_score ?? null,
+          delta: key.fico_delta_24h ?? null,
+          today_usd: Number(todayUsd.toFixed(2)),
+          anomalies,
+        };
+      });
+
+      return json(res, {
+        ok: true,
+        accountId,
+        today_total_usd: Number(todayTotalUsd.toFixed(2)),
+        agents: agentsOut,
+      });
+    } catch (e) {
+      return errorJson(res, e);
+    }
+  }
+
+  // ── /events/stream — SSE anomaly feed ───────────────────────────────────
+  // Long-lived response. Emits audit events whose action matches anomaly /
+  // fraud / risk for this accountId. Heartbeat every 30s as ":\n\n" so
+  // proxies don't drop the connection. Polls auditEvents tail every 5s
+  // (cheap — ring buffer is ≤ AUDIT_RING_SIZE in memory).
+  if (pathname === '/events/stream' && req.method === 'GET') {
+    try {
+      const accountId = accountIdForRequest(req);
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+        'Access-Control-Allow-Origin': '*',
+      });
+      // Send a hello so the client knows the stream is alive.
+      res.write(`event: hello\ndata: ${JSON.stringify({ ts: new Date().toISOString(), accountId })}\n\n`);
+
+      // Send the last hour of anomaly events as backlog.
+      const oneHourAgoMs = Date.now() - 60 * 60 * 1000;
+      const backlog = auditEvents.filter(
+        (e) => e.accountId === accountId &&
+               /anomaly|fraud|risk/.test(e.action) &&
+               new Date(e.createdAt).getTime() >= oneHourAgoMs
+      );
+      for (const e of backlog) {
+        res.write(`data: ${JSON.stringify({
+          type: 'anomaly',
+          agent_id: (e.subject || '').replace(/^api_key:/, ''),
+          reason: e.action,
+          details: e.details || null,
+          ts: e.createdAt,
+        })}\n\n`);
+      }
+
+      let lastSeenIdx = auditEvents.length;
+      const pollMs = 5000;
+      const heartbeatMs = 30000;
+
+      const pollTimer = setInterval(() => {
+        try {
+          if (auditEvents.length > lastSeenIdx) {
+            const fresh = auditEvents.slice(lastSeenIdx);
+            for (const e of fresh) {
+              if (e.accountId !== accountId) continue;
+              if (!/anomaly|fraud|risk/.test(e.action)) continue;
+              res.write(`data: ${JSON.stringify({
+                type: 'anomaly',
+                agent_id: (e.subject || '').replace(/^api_key:/, ''),
+                reason: e.action,
+                details: e.details || null,
+                ts: e.createdAt,
+              })}\n\n`);
+            }
+            lastSeenIdx = auditEvents.length;
+          }
+        } catch (_) { /* swallow — keep stream alive */ }
+      }, pollMs);
+
+      const heartbeatTimer = setInterval(() => {
+        try { res.write(':\n\n'); } catch (_) { /* connection closed */ }
+      }, heartbeatMs);
+
+      const cleanup = () => {
+        clearInterval(pollTimer);
+        clearInterval(heartbeatTimer);
+        try { res.end(); } catch (_) { /* already closed */ }
+      };
+      req.on('close', cleanup);
+      req.on('error', cleanup);
+      return; // long-lived; do not fall through
+    } catch (e) {
+      return errorJson(res, e);
+    }
   }
 
   if (pathname === '/api/v1/billing/onboarding' && req.method === 'GET') {
