@@ -4,6 +4,138 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [1.8.0-alpha.0] — 2026-05-14
+
+Native-shift Stage 1 — new modules consumed by `mnemopay-gateway`,
+`mnemopay-code`, and `mnemopay-browser`. All additive; no breaking changes
+to the 1.7.0 surface. Published to the `alpha` dist-tag.
+
+```bash
+npm install @mnemopay/sdk@alpha   # 1.8.0-alpha.0
+```
+
+### Added
+
+- **`@mnemopay/sdk/governance/policy`** — sub-second policy enforcement
+  (EU AI Act-shaped timer). Benchmarks over 5k evals: P50 3.7µs,
+  P95 7.7µs, P99 ~100µs. Pure CPU path, zero allocs in the hot loop.
+- **`@mnemopay/sdk/governance/policy-lint`** — compile-time validation of
+  policy rule shapes so misconfigurations fail at startup, not at the
+  first agent action.
+- **`@mnemopay/sdk/governance/eu-ai-act`** — illustrative EU AI Act sample
+  policy. Not legal advice; a copy-and-customise starting point for
+  regulated buyers.
+- **`@mnemopay/sdk/governance/approval`** — in-memory approval queue +
+  `routeVerdict` helper for high-risk mission gates (HITL).
+- **`@mnemopay/sdk/governance/audit-chain`** — shared event-stream Merkle
+  audit. Consumed by `mnemopay-code` for mission audit bundles and
+  `mnemopay-browser` for Article 12 session records.
+- **`@mnemopay/sdk/governance/rate-counter`** — `RateCounter` interface
+  (Redis-adapter shape).
+- **`@mnemopay/sdk/recall/anchor`** — `MemoryAnchor`, DID-signed content
+  commit, nonce + `expires_at` replay defenses, `InMemoryNonceStore`,
+  `rollAnchorRoot`.
+
+### New subpath exports
+
+- `@mnemopay/sdk/governance`
+- `@mnemopay/sdk/governance/policy`
+- `@mnemopay/sdk/governance/audit-chain`
+- `@mnemopay/sdk/governance/approval`
+- `@mnemopay/sdk/governance/eu-ai-act`
+- `@mnemopay/sdk/recall/anchor`
+
+### Compatibility
+
+- Backward compatible with 1.7.0; only new symbols and new subpath
+  exports. Existing `@mnemopay/sdk` root import behavior is unchanged.
+- Continue using subpath imports (`/governance/policy`, `/recall/anchor`)
+  rather than root import when you only need one module — root pulls
+  in `dist/mcp/server.js` startup side-effects.
+
+## [1.7.0] — 2026-05-14
+
+First native primitive of the trust-layer shift: portable agent identity.
+Foundation for the forthcoming Recall+GridStamp anchor, MCP native
+gateway, Browser thin layer, and Coding regulated-enterprise primitives —
+every subsequent primitive consumes Identity for portable cross-platform
+reputation.
+
+```bash
+npm install @mnemopay/sdk          # 1.7.0
+```
+
+### Added
+
+- **`@mnemopay/sdk/identity`** — DID + Wallet primitive under the new
+  `./identity` export subpath.
+- **`did.ts`** — `mintDid`, `sign`, `verify`, `resolveDid`, `isDid`,
+  `publicKeyMatchesDid`; types `Did` / `DidDocument` / `MintedDid`.
+  Method `did:mp:<32-hex>` where the tail is the first 16 bytes of
+  `SHA-256(SPKI-DER(ed25519-pubkey))`. Self-certifying — a verifier can
+  confirm a DID document is authentic by hashing the embedded public key.
+  128 bits of identifier entropy. v1 resolver is in-process; bundles
+  auto-register on import.
+- **`bundle.ts`** — `exportBundle`, `importBundle`, `canonicalize`
+  (RFC 8785-compatible JCS for our shapes), `hashPaymentHistory`; types
+  `IdentityBundle` / `IdentityBundlePayload` / `ExportBundleOptions`.
+- **`wallet.ts`** — `Wallet.create` / `load` / `openOrCreate`; `sign`,
+  `verify`, `exportBundle`, `fingerprint`, `persistToDisk`, `diskPath`.
+  Private key state lives in a module-local `WeakMap` so neither
+  `Object.keys` nor `JSON.stringify` can see it.
+
+### Other
+
+- Dashboard header now surfaces the current account + email when signed
+  in, or shows "Not signed in" + the anonymous accountId fallback. Users
+  could previously hit dashboard.mnemopay.com and not be able to tell
+  which account context they were operating in.
+
+### Compatibility
+
+- Backward compatible with 1.6.x. Zero new runtime deps — uses
+  `node:crypto` throughout.
+- 36/36 identity specs passing (did 13, bundle 11, wallet 12). `tsc
+  --noEmit` clean under `strict: true`.
+- Tarball SHA `f009fce07fa6b81e2ede2758df080478bd275772`,
+  441.9 KB packed / 1.9 MB unpacked, 255 files.
+
+## [1.6.1] — 2026-05-13
+
+Three "ready to take paying customers" hard blockers closed. All in the
+MCP server + recall persistence layer.
+
+```bash
+npm install @mnemopay/sdk          # 1.6.1
+```
+
+### Fixed
+
+- **HITL approval queue is now durable.** `pendingChargeRequests` and
+  `pendingApprovals` were in-process `Map`s that silently vanished on pod
+  restart. Now backed by SQLite via `src/storage/approval-queue.ts`;
+  rehydrates on startup. Shop approvals rehydrate with a no-op resolve
+  (the original `Promise` is dead, so settlement re-fires through the
+  durable queue). 10-min expiry sweep, single-process writes. 6 specs.
+- **Webhooks actually fire now.** `webhook_register` previously returned
+  success without ever firing. New `src/storage/webhooks.ts` persists
+  subscriptions with HMAC secret, enqueues deliveries via `fire()`,
+  drains via `pumpOnce()` on a 2s `setInterval` with exponential backoff
+  (1s → 32s, 6 attempts), DLQs to `status='dead'` after exhaustion.
+  Signature uses the Stripe pattern:
+  `X-MnemoPay-Signature: t=<unix>,v1=<hex-hmac-sha256(t + "." + body)>`.
+  Wired into `charge`, `charge_approve`, `settle`, `refund`,
+  `payout_create` success paths. 10 specs.
+- **SQLiteAdapter for recall persistence.** New
+  `src/recall/persistence/sqlite.ts` is the durable backing for recall
+  events when running outside the in-memory mock. Brain bridge consumes
+  it directly.
+
+### Compatibility
+
+- Wire-compatible with 1.6.0. New subpath imports `/storage/webhooks`
+  and `/storage/approval-queue` are additive.
+
 ## [1.6.0] — 2026-05-11
 
 Promotes the `1.6.0-alpha.{0,1,2}` line on the `alpha` dist-tag to a stable
