@@ -4,6 +4,42 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+Phase 2 of the native-AI shift: **RecallAnchor adapter** — every anchored
+memory can now produce a content-addressed receipt and (optionally) push
+it to an external evidence sink. Memory itself becomes auditable evidence,
+which is the substrate-level moat the governed-transaction-OS thesis
+depends on.
+
+All additive; no breaking changes to the 1.8.1 surface. No version bump
+in this entry — bundle with the next patch.
+
+### Added
+
+- **`recall/anchor-adapter.ts`** — new pure module (zero I/O), exports:
+  - `RecallAnchorAdapter` — interface for content-addressed receipt sinks.
+    Deterministic on `content_id`; fail-soft on external-sink errors so the
+    `remember()` write path never breaks.
+  - `AnchorReceipt` — sink-agnostic envelope (`version`, `memory_id`,
+    `content_id`, `sink_id`, `sink_receipt`, `receipted_at`).
+  - `computeAnchorContentId(anchor)` — deterministic SHA-256 over the
+    canonicalised anchor JSON; same id across adapters.
+  - `NoopAnchorAdapter` — computes receipt, never forwards. Safe default.
+  - `InMemoryAnchorAdapter` — reference implementation; tracks a Merkle
+    batch and exposes `currentRoot()` / `batchHashes()` / `reset()`.
+  - `GridStampAnchorAdapter` + `GridStampRemoteIdSink` — thin wrapper
+    around GridStamp's `remoteid.sign + batchRoot` API. Loose-coupled
+    (no `gridstamp` peer dep); caller passes any object satisfying the
+    sink contract.
+
+### Tests
+
+- 6 new specs in `tests/anchor-adapter.test.ts`: deterministic content-id
+  (1), Noop receipt shape (1), InMemory Merkle batch growth + reset (1),
+  GridStamp sink forward (1), GridStamp fail-soft on sink error (1),
+  GridStamp construction guard (1). All green.
+
 ## [1.8.1] — 2026-05-15
 
 Engine-side anchor auto-wire. Closes the deferred item from 1.8.0: anchors
