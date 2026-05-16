@@ -4,16 +4,22 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [1.8.2] — 2026-05-16
 
-Phase 2 of the native-AI shift: **RecallAnchor adapter** — every anchored
-memory can now produce a content-addressed receipt and (optionally) push
-it to an external evidence sink. Memory itself becomes auditable evidence,
-which is the substrate-level moat the governed-transaction-OS thesis
-depends on.
+Phase 2 of the native-AI shift plus governance-latency observability and a
+regression test for the root-import side-effect guard. All additive; no
+breaking changes to the 1.8.1 surface.
 
-All additive; no breaking changes to the 1.8.1 surface. No version bump
-in this entry — bundle with the next patch.
+### Added (in addition to the Phase 2 anchor adapter)
+
+- **`tests/bench/governance-latency.bench.ts`** — vitest.bench harness for
+  the governance hot paths (`policy.eval`, `MerkleAudit.append`, end-to-end
+  charter-check + anchor-emit). Run with `npm run bench`. Lets the
+  "sub-second governance" claim become a tested invariant.
+- **`tests/no-side-effect-on-root-import.test.ts`** — spawns a subprocess,
+  imports the root SDK, asserts no `[mnemopay-mcp]` stdio noise. Regression
+  cover for the `require.main === module` guard at `src/mcp/server.ts`.
+- **`npm run bench`** script in `package.json`.
 
 ### Added
 
