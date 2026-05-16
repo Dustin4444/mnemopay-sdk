@@ -97,6 +97,7 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
+    "bench": "vitest bench --run",
     "lint": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
