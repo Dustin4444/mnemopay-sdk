@@ -5,15 +5,14 @@
 MnemoPay sits **above** the rail (Stripe, Paystack, Lightning, Stripe MPP, x402, Google AP2) and **below** the agent runtime (LangChain, CrewAI, Claude Agent SDK, your own loop). The rail moves money. The runtime decides. MnemoPay declares the rules, enforces the budget, and produces the evidence.
 
 ```bash
-npm install @mnemopay/sdk           # stable (v1.5.x)
-npm install @mnemopay/sdk@alpha     # v1.6.x preview — Stripe MPP + x402 + Google AP2 rails
+npm install @mnemopay/sdk
 ```
 
 ```ts
 import MnemoPay, {
   Charter, FiscalGate, MerkleAudit,        // governance primitives
   AgentCreditScore, BehavioralEngine,       // trust + reputation
-  StripeRail, X402Rail, GoogleAP2Rail,      // rails (alpha)
+  StripeRail, X402Rail, GoogleAP2Rail,      // rails
 } from "@mnemopay/sdk";
 
 const agent = MnemoPay.quick("my-agent");
@@ -35,23 +34,17 @@ const result = score.compute({ transactions: [tx], createdAt: new Date(), /* ...
 
 ---
 
-## What's new in v1.6.0-alpha (preview channel)
+## Native rails
 
-Three new rails, all native, all sharing the same `PaymentRail` interface as `StripeRail` / `PaystackRail` / `LightningRail`:
+Every rail ships with the same `PaymentRail` interface as `StripeRail` / `PaystackRail` / `LightningRail`:
 
-| Rail | What it is | Status |
-|---|---|---|
-| **`StripeMPPRail`** | Stripe Machine Payments Protocol — agent payments routed as crypto deposits on the Tempo network via Stripe-pinned API `2026-03-04.preview` | alpha |
-| **`X402Rail`** | Coinbase x402 (HTTP 402 revival) — USDC on Base L2 via EIP-3009 `transferWithAuthorization`. Pluggable signer (bring-your-own viem/ethers/noble). Zero crypto deps in the SDK. | alpha |
-| **`GoogleAP2Rail`** | Google Agent Payment Protocol (FIDO Alliance, AP2 v0.2). Mandate VC + Intent VC + HTTP settlement. Pre-flight policy enforcement (caps, expiry, currency, recipients) before any signature is produced. | alpha |
+| Rail | What it is |
+|---|---|
+| **`StripeMPPRail`** | Stripe Machine Payments Protocol — agent payments routed as crypto deposits on the Tempo network via Stripe-pinned API `2026-03-04.preview` |
+| **`X402Rail`** | Coinbase x402 (HTTP 402 revival) — USDC on Base L2 via EIP-3009 `transferWithAuthorization`. Pluggable signer (bring-your-own viem/ethers/noble). Zero crypto deps in the SDK. |
+| **`GoogleAP2Rail`** | Google Agent Payment Protocol (FIDO Alliance, AP2 v0.2). Mandate VC + Intent VC + HTTP settlement. Pre-flight policy enforcement (caps, expiry, currency, recipients) before any signature is produced. |
 
 Plus the **Spatial governance fold** — `attachSpatialEvidence()` co-signs the MerkleAudit chain with GridStamp proof-of-presence for embodied agents (drones, robots). Loose-coupled — no `gridstamp` runtime dependency.
-
-```bash
-npm install @mnemopay/sdk@alpha
-```
-
-The `latest` dist-tag still points at `1.5.0` — stable users see no change. Promote `alpha` → `latest` when v1.6.0 ships.
 
 ### Subpath imports for smaller, safer consumers
 
@@ -422,27 +415,25 @@ See `docs/agent-sdk-guide.md` for a full integration walkthrough.
 
 Every rail implements the same `PaymentRail` interface — `createHold` / `capturePayment` / `reversePayment`. Swap rails without touching agent code.
 
-| Rail | Coverage | Channel |
-|---|---|---|
-| `StripeRail` | Cards (USD, EUR, GBP, +) | stable (`latest`) |
-| `PaystackRail` | Africa (NGN, GHS, ZAR, KES) | stable (`latest`) |
-| `LightningRail` | BTC sub-cent micropayments | stable (`latest`) |
-| `StripeMPPRail` | Crypto deposits on Tempo via Stripe MPP | preview (`alpha`) |
-| `X402Rail` | USDC on Base via EIP-3009 transferWithAuthorization | preview (`alpha`) |
-| `GoogleAP2Rail` | AP2 v0.2 mandate-driven settlement (FIDO Alliance) | preview (`alpha`) |
+| Rail | Coverage |
+|---|---|
+| `StripeRail` | Cards (USD, EUR, GBP, +) |
+| `PaystackRail` | Africa (NGN, GHS, ZAR, KES) |
+| `LightningRail` | BTC sub-cent micropayments |
+| `StripeMPPRail` | Crypto deposits on Tempo via Stripe MPP |
+| `X402Rail` | USDC on Base via EIP-3009 transferWithAuthorization |
+| `GoogleAP2Rail` | AP2 v0.2 mandate-driven settlement (FIDO Alliance) |
 
 ```ts
 import {
-  PaystackRail, StripeRail, LightningRail,    // stable
-  StripeMPPRail, X402Rail, GoogleAP2Rail,      // alpha
+  PaystackRail, StripeRail, LightningRail,
+  StripeMPPRail, X402Rail, GoogleAP2Rail,
 } from "@mnemopay/sdk";
 
-// Stable
 const paystack  = new PaystackRail(process.env.PAYSTACK_SECRET_KEY!);
 const stripe    = new StripeRail(process.env.STRIPE_SECRET_KEY!);
 const lightning = new LightningRail(LND_URL, MACAROON);
 
-// Preview (v1.6.0-alpha)
 const mpp   = new StripeMPPRail(process.env.STRIPE_SECRET_KEY!);
 const x402  = new X402Rail({ signer: yourEip3009Signer });   // bring-your-own crypto
 const ap2   = new GoogleAP2Rail({ mandate, endpoint, signer });
@@ -544,8 +535,8 @@ import { mnemoPayTools } from "@mnemopay/sdk/langgraph";
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                MnemoPay SDK v1.6.0-alpha (alpha tag)             │
-│            v1.5.0 stable on `latest` — same architecture          │
+│                       MnemoPay SDK                                │
+│              Governance · Memory · Payments · Identity            │
 ├─────────────────────────────────────────────────────────────────┤
 │ GOVERNANCE  Charter · FiscalGate · Article 12 · MerkleAudit      │
 │             mission scope, budget enforcement, audit bundles     │
