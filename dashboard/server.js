@@ -122,9 +122,61 @@ function tryRequireSDK() {
   throw lastErr;
 }
 
+// ── Multi-tenant agent registry ─────────────────────────────────────────────
+// Per-request agent resolution: pulls X-Agent-Id header, or `did`/`sub` claim
+// from a Bearer JWT, or ?agentId= query param, falling back to the singleton
+// "dashboard-live" agent for anonymous traffic. Each unique agentId gets its
+// own MnemoPay instance, cached. Cap at 5000 to bound memory growth.
+const SINGLETON_AGENT_ID = process.env.MNEMOPAY_AGENT_ID || 'dashboard-live';
+const _agentRegistry = new Map();
+let _sdkRef = null;
+
+function getAgent(req) {
+  const id = extractAgentId(req) || SINGLETON_AGENT_ID;
+  if (_agentRegistry.has(id)) return _agentRegistry.get(id);
+  const inst = _sdkRef
+    ? _sdkRef.main.MnemoPay.quick(id)
+    : createFallbackAgent(id);
+  _agentRegistry.set(id, inst);
+  if (_agentRegistry.size > 5000) {
+    const firstKey = _agentRegistry.keys().next().value;
+    if (firstKey && firstKey !== SINGLETON_AGENT_ID) _agentRegistry.delete(firstKey);
+  }
+  return inst;
+}
+
+function extractAgentId(req) {
+  if (!req) return null;
+  const hdr = req.headers?.['x-agent-id'];
+  if (hdr) return String(hdr).slice(0, 200);
+  const auth = req.headers?.['authorization'] || '';
+  const m = /^Bearer\s+(.+)$/.exec(auth);
+  if (m) {
+    const parts = m[1].split('.');
+    if (parts.length === 3) {
+      try {
+        const claims = JSON.parse(
+          Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+        );
+        if (claims.did) return String(claims.did).slice(0, 200);
+        if (claims.sub) return `user-${String(claims.sub).slice(0, 100)}`;
+      } catch { /* malformed jwt — fall through */ }
+    }
+  }
+  try {
+    const u = new URL(req.url, 'http://localhost');
+    const q = u.searchParams.get('agentId');
+    if (q) return String(q).slice(0, 200);
+  } catch { /* parse-fail — fall through */ }
+  return null;
+}
+
 try {
   const SDK = tryRequireSDK();
-  agent = SDK.main.MnemoPay.quick(process.env.MNEMOPAY_AGENT_ID || 'dashboard-live');
+  _sdkRef = SDK;
+  // Pre-warm the singleton so /index.html doesn't lag the first paint.
+  agent = SDK.main.MnemoPay.quick(SINGLETON_AGENT_ID);
+  _agentRegistry.set(SINGLETON_AGENT_ID, agent);
   const RecallEngine = SDK.recall.RecallEngine || SDK.main.RecallEngine;
   if (RecallEngine) {
     brain = new RecallEngine({
@@ -2459,6 +2511,7 @@ async function handleRequest(req, res) {
 
   // Memories
   if (pathname === '/api/memories' && req.method === 'GET') {
+      const agent = getAgent(req);
     const limit = parseInt(url.searchParams.get('limit') || '50');
     const query = url.searchParams.get('q');
     const memories = query ? await agent.recall(query, limit) : await agent.recall(limit);
@@ -2466,30 +2519,35 @@ async function handleRequest(req, res) {
   }
 
   if (pathname === '/api/memories' && req.method === 'POST') {
+      const agent = getAgent(req);
     const body = await readBody(req);
     const id = await agent.remember(body.content, { importance: body.importance, tags: body.tags });
     return json(res, { id, status: 'stored' }, 201);
   }
 
   if (pathname.startsWith('/api/memories/') && req.method === 'DELETE') {
+      const agent = getAgent(req);
     const id = pathname.split('/')[3];
     const deleted = await agent.forget(id);
     return json(res, { deleted });
   }
 
   if (pathname === '/api/memories/reinforce' && req.method === 'POST') {
+      const agent = getAgent(req);
     const body = await readBody(req);
     await agent.reinforce(body.id, body.boost || 0.1);
     return json(res, { reinforced: true });
   }
 
   if (pathname === '/api/memories/consolidate' && req.method === 'POST') {
+      const agent = getAgent(req);
     const pruned = await agent.consolidate();
     return json(res, { pruned });
   }
 
   // Payments
   if (pathname === '/api/charge' && req.method === 'POST') {
+      const agent = getAgent(req);
     try {
       const accountId = accountIdForRequest(req);
       const body = await readBody(req);
@@ -2505,6 +2563,7 @@ async function handleRequest(req, res) {
   }
 
   if (pathname === '/api/settle' && req.method === 'POST') {
+      const agent = getAgent(req);
     const accountId = accountIdForRequest(req);
     const body = await readBody(req);
     const tx = await agent.settle(body.txId);
@@ -2517,6 +2576,7 @@ async function handleRequest(req, res) {
   }
 
   if (pathname === '/api/refund' && req.method === 'POST') {
+      const agent = getAgent(req);
     const body = await readBody(req);
     const tx = await agent.refund(body.txId);
     return json(res, tx || { error: 'Transaction not found' });
@@ -2524,22 +2584,26 @@ async function handleRequest(req, res) {
 
   // Profile & status
   if (pathname === '/api/profile' && req.method === 'GET') {
+      const agent = getAgent(req);
     const profile = await agent.profile();
     return json(res, profile);
   }
 
   if (pathname === '/api/balance' && req.method === 'GET') {
+      const agent = getAgent(req);
     const balance = await agent.balance();
     return json(res, balance);
   }
 
   if (pathname === '/api/history' && req.method === 'GET') {
+      const agent = getAgent(req);
     const limit = parseInt(url.searchParams.get('limit') || '20');
     const history = await agent.history(limit);
     return json(res, history);
   }
 
   if (pathname === '/api/logs' && req.method === 'GET') {
+      const agent = getAgent(req);
     const limit = parseInt(url.searchParams.get('limit') || '30');
     const logs = await agent.logs(limit);
     return json(res, logs);
@@ -2547,6 +2611,7 @@ async function handleRequest(req, res) {
 
   // Console/app surface
   if (pathname === '/api/v1/console/overview' && req.method === 'GET') {
+      const agent = getAgent(req);
     const accountId = accountIdForRequest(req);
     const profile = await agent.profile();
     const balance = await agent.balance();
@@ -3176,7 +3241,14 @@ async function handleRequest(req, res) {
 
   // Health: liveness probe — process is alive and event loop responsive.
   if (pathname === '/healthz') {
-    return json(res, { status: 'ok', mode: 'live', agentId: agent.agentId || 'dashboard-live', storeDriver: CONSOLE_STORE_DRIVER });
+    return json(res, {
+      status: 'ok',
+      mode: 'live',
+      tenancy: 'multi-tenant',
+      singletonAgentId: SINGLETON_AGENT_ID,
+      agentCacheSize: _agentRegistry.size,
+      storeDriver: CONSOLE_STORE_DRIVER,
+    });
   }
 
   // Readiness: deps reachable + required config present. Returns 503 when not ready.
