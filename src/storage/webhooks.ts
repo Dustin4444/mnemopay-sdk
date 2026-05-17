@@ -320,6 +320,41 @@ export class WebhookStore {
     };
   }
 
+  /**
+   * Inspect enqueued deliveries (test/ops helper).
+   * Returns rows in insertion order.
+   */
+  listDeliveries(opts: { status?: "pending" | "delivered" | "dead"; event?: string; limit?: number } = {}): WebhookDelivery[] {
+    const clauses: string[] = [];
+    const params: any[] = [];
+    if (opts.status) {
+      clauses.push("status = ?");
+      params.push(opts.status);
+    }
+    if (opts.event) {
+      clauses.push("event = ?");
+      params.push(opts.event);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const limit = opts.limit ?? 100;
+    const rows: any[] = this.db
+      .prepare(`SELECT * FROM deliveries ${where} ORDER BY created_at ASC LIMIT ?`)
+      .all(...params, limit);
+    return rows.map((r) => ({
+      id: r.id,
+      subscriptionId: r.subscription_id,
+      event: r.event,
+      payload: r.payload,
+      attempts: r.attempts,
+      nextAttemptAt: r.next_attempt_at,
+      status: r.status,
+      lastError: r.last_error ?? undefined,
+      lastStatusCode: r.last_status_code ?? undefined,
+      createdAt: r.created_at,
+      deliveredAt: r.delivered_at ?? undefined,
+    }));
+  }
+
   countByStatus(): { pending: number; delivered: number; dead: number } {
     const rows = this.db
       .prepare(`SELECT status, COUNT(*) AS n FROM deliveries GROUP BY status`)

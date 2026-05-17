@@ -923,7 +923,7 @@ const TOOLS = [
 
 // ─── Tool execution ─────────────────────────────────────────────────────────
 
-async function executeTool(agent: Agent, name: string, args: Record<string, any>): Promise<string> {
+export async function executeTool(agent: Agent, name: string, args: Record<string, any>): Promise<string> {
   switch (name) {
     case "remember": {
       const opts: any = {};
@@ -1002,19 +1002,57 @@ async function executeTool(agent: Agent, name: string, args: Record<string, any>
     }
 
     case "charge": {
-      const tx = await agent.charge(args.amount, args.reason);
+      let tx;
+      try {
+        tx = await agent.charge(args.amount, args.reason);
+      } catch (err: any) {
+        fireWebhook("charge.failed", {
+          amount: args.amount,
+          reason: args.reason,
+          error: err?.message || String(err),
+          errorCode: err?.code,
+          rail: (agent as any).paymentRail?.name,
+          agentId: (agent as any).agentId,
+        });
+        throw err;
+      }
       fireWebhook("charge.success", { txId: tx.id, amount: tx.amount, status: tx.status, reason: tx.reason, agentId: (agent as any).agentId });
       return JSON.stringify({ txId: tx.id, amount: tx.amount, status: tx.status, reason: tx.reason });
     }
 
     case "settle": {
-      const tx = await agent.settle(args.txId, args.counterpartyId);
+      let tx;
+      try {
+        tx = await agent.settle(args.txId, args.counterpartyId);
+      } catch (err: any) {
+        fireWebhook("settle.failed", {
+          txId: args.txId,
+          counterpartyId: args.counterpartyId,
+          error: err?.message || String(err),
+          errorCode: err?.code,
+          rail: (agent as any).paymentRail?.name,
+          agentId: (agent as any).agentId,
+        });
+        throw err;
+      }
       fireWebhook("settle", { txId: tx.id, amount: tx.amount, status: tx.status, rail: (agent as any).paymentRail?.name, agentId: (agent as any).agentId });
       return JSON.stringify({ txId: tx.id, amount: tx.amount, status: tx.status, rail: (agent as any).paymentRail?.name });
     }
 
     case "refund": {
-      const tx = await agent.refund(args.txId);
+      let tx;
+      try {
+        tx = await agent.refund(args.txId);
+      } catch (err: any) {
+        fireWebhook("refund.failed", {
+          txId: args.txId,
+          error: err?.message || String(err),
+          errorCode: err?.code,
+          rail: (agent as any).paymentRail?.name,
+          agentId: (agent as any).agentId,
+        });
+        throw err;
+      }
       fireWebhook("refund", { txId: tx.id, status: tx.status, agentId: (agent as any).agentId });
       return JSON.stringify({ txId: tx.id, status: tx.status });
     }
@@ -1235,7 +1273,21 @@ async function executeTool(agent: Agent, name: string, args: Record<string, any>
       const req = approvalQueue().removeCharge(args.requestId);
       if (!req) throw new Error(`No pending charge request ${args.requestId}`);
       // Execute the real charge
-      const tx = await agent.charge(req.amount, req.reason, req.context, req.payOptions);
+      let tx;
+      try {
+        tx = await agent.charge(req.amount, req.reason, req.context, req.payOptions);
+      } catch (err: any) {
+        fireWebhook("charge.failed", {
+          amount: req.amount,
+          reason: req.reason,
+          hitlRequestId: args.requestId,
+          error: err?.message || String(err),
+          errorCode: err?.code,
+          rail: (agent as any).paymentRail?.name,
+          agentId: (agent as any).agentId,
+        });
+        throw err;
+      }
       fireWebhook("charge.success", { txId: tx.id, amount: tx.amount, status: tx.status, reason: req.reason, hitlRequestId: args.requestId, agentId: (agent as any).agentId });
       return JSON.stringify({
         status: "charged",
@@ -1429,17 +1481,36 @@ async function executeTool(agent: Agent, name: string, args: Record<string, any>
     case "payout_create": {
       const rail = (agent as any).paymentRail;
       if (!rail || rail.name !== "paystack") throw new Error("payout_create requires Paystack rail. Set MNEMOPAY_PAYMENT_RAIL=paystack");
-      const recipient = await rail.createTransferRecipient(
-        args.accountName,
-        args.accountNumber,
-        args.bankCode,
-      );
-      const transfer = await rail.initiateTransfer(
-        recipient.recipientCode,
-        args.amount,
-        args.reason,
-        (agent as any).agentId,
-      );
+      let recipient;
+      let transfer;
+      try {
+        recipient = await rail.createTransferRecipient(
+          args.accountName,
+          args.accountNumber,
+          args.bankCode,
+        );
+        transfer = await rail.initiateTransfer(
+          recipient.recipientCode,
+          args.amount,
+          args.reason,
+          (agent as any).agentId,
+        );
+      } catch (err: any) {
+        fireWebhook("transfer.failed", {
+          amount: args.amount,
+          reason: args.reason,
+          accountName: args.accountName,
+          accountNumber: args.accountNumber,
+          bankCode: args.bankCode,
+          recipientCode: recipient?.recipientCode,
+          stage: recipient ? "initiate_transfer" : "create_recipient",
+          error: err?.message || String(err),
+          errorCode: err?.code,
+          rail: "paystack",
+          agentId: (agent as any).agentId,
+        });
+        throw err;
+      }
       fireWebhook("transfer.success", {
         transferCode: transfer.externalId,
         reference: transfer.reference,

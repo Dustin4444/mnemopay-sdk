@@ -76,6 +76,10 @@ describe("ap2 — happy path", () => {
     expect(cred.proof.verificationMethod).toBe(`${did}#keys-1`);
     expect(cred.proof.proofPurpose).toBe("assertionMethod");
     expect(cred.proof.proofValue.length).toBeGreaterThan(0);
+    // Per W3C VC Data Integrity 1.0 / AP2 v0.2, proofValue is Multibase
+    // base58btc (`z` prefix). No characters from the base58 exclusion set.
+    expect(cred.proof.proofValue.charAt(0)).toBe("z");
+    expect(cred.proof.proofValue.slice(1)).toMatch(/^[1-9A-HJ-NP-Za-km-z]+$/);
 
     const result = verifyAp2Credential(cred);
     expect(result.valid).toBe(true);
@@ -136,19 +140,41 @@ describe("ap2 — verification failures", () => {
     }
   });
 
-  it("rejects with `proof_invalid` when the signature is tampered", () => {
+  it("rejects with `proof_invalid` when the signature is tampered (Multibase round-trip)", async () => {
+    const { multibaseBase58btcDecode, multibaseBase58btcEncode } = await import(
+      "./multibase.js"
+    );
     const { did, publicKey, privateKey } = mintDid();
     const cred = toAp2Credential(sampleInput(did, privateKey, publicKey));
-    const tamperedSig = Buffer.from(cred.proof.proofValue, "base64");
-    tamperedSig[0] = tamperedSig[0]! ^ 0xff;
+    const sigBytes = multibaseBase58btcDecode(cred.proof.proofValue);
+    sigBytes[0] = sigBytes[0]! ^ 0xff;
     const tampered: Ap2Credential = {
       ...cred,
-      proof: { ...cred.proof, proofValue: tamperedSig.toString("base64") },
+      proof: {
+        ...cred.proof,
+        proofValue: multibaseBase58btcEncode(sigBytes),
+      },
     };
     const result = verifyAp2Credential(tampered);
     expect(result.valid).toBe(false);
     if (!result.valid) {
       expect(result.error).toBe("proof_invalid");
+    }
+  });
+
+  it("rejects with `proof_invalid` when proofValue is not Multibase base58btc", () => {
+    const { did, publicKey, privateKey } = mintDid();
+    const cred = toAp2Credential(sampleInput(did, privateKey, publicKey));
+    const notMultibase: Ap2Credential = {
+      ...cred,
+      // Strip the `z` prefix → not a Multibase string anymore.
+      proof: { ...cred.proof, proofValue: cred.proof.proofValue.slice(1) },
+    };
+    const result = verifyAp2Credential(notMultibase);
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.error).toBe("proof_invalid");
+      expect(result.detail).toMatch(/Multibase/i);
     }
   });
 

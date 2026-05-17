@@ -29,8 +29,9 @@ import type { Currency } from "./ledger.js";
 
 // ─── Pricing Table ────────────────────────────────────────────────────────────
 // USD per 1M tokens. Source: Anthropic 2026 list pricing.
-// TODO: update if Anthropic changes rates; do not use these for customer billing
-// without verifying against the current Anthropic pricing page.
+// Last verified 2026-05-17 against anthropic.com/pricing — re-verify quarterly.
+// These rates are the SDK's internal cost-attribution defaults; do not use them
+// as the basis for customer billing without an out-of-band rate confirmation.
 
 export interface ModelPricing {
   inputPerMillion: number;

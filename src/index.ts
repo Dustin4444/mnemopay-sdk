@@ -186,6 +186,20 @@ export interface RememberOptions {
    * anchor payload so it cannot be swapped post-mint. Ignored when no
    * anchor is being minted. */
   gridstamp?: GridStampSpatialProof;
+  /** When true, `remember()` returns `{ id, anchor }` instead of just the id
+   * so callers don't need a follow-up `getAnchor(id)` call. `anchor` may
+   * still be `undefined` when no anchor was minted on the write path. */
+  returnReceipt?: boolean;
+}
+
+/**
+ * Structured `remember()` return when called with `opts.returnReceipt === true`.
+ * `anchor` is undefined when no anchor was minted (e.g. anchoring not enabled
+ * or `opts.anchor === false`).
+ */
+export interface RememberReceipt {
+  id: string;
+  anchor: MemoryAnchor | undefined;
 }
 
 export interface Transaction {
@@ -924,7 +938,15 @@ export class MnemoPayLite extends EventEmitter {
     return this.memories.get(memoryId)?.anchor;
   }
 
-  async remember(content: string, opts?: RememberOptions): Promise<string> {
+  async remember(
+    content: string,
+    opts: RememberOptions & { returnReceipt: true },
+  ): Promise<RememberReceipt>;
+  async remember(content: string, opts?: RememberOptions): Promise<string>;
+  async remember(
+    content: string,
+    opts?: RememberOptions,
+  ): Promise<string | RememberReceipt> {
     if (!content || typeof content !== "string") throw new Error("Memory content is required");
     if (content.length > 100_000) throw new Error("Memory content exceeds 100KB limit");
     // Security: prevent memory exhaustion attacks
@@ -1023,6 +1045,7 @@ export class MnemoPayLite extends EventEmitter {
     this.emit("memory:stored", { id: mem.id, importance: mem.importance, factType });
     this.adaptive.observe({ type: "memory_store", agentId: this.agentId, timestamp: Date.now() });
     this.log(`Stored memory: id=${mem.id} (factType: ${factType}, importance: ${mem.importance.toFixed(2)}, tags: ${safeTags.join(",") || "none"})`);
+    if (opts?.returnReceipt) return { id: mem.id, anchor: mem.anchor };
     return mem.id;
   }
 
@@ -1919,7 +1942,15 @@ export class MnemoPay extends EventEmitter {
 
   // ── Memory Methods (→ Mnemosyne API) ───────────────────────────────────
 
-  async remember(content: string, opts?: RememberOptions): Promise<string> {
+  async remember(
+    content: string,
+    opts: RememberOptions & { returnReceipt: true },
+  ): Promise<RememberReceipt>;
+  async remember(content: string, opts?: RememberOptions): Promise<string>;
+  async remember(
+    content: string,
+    opts?: RememberOptions,
+  ): Promise<string | RememberReceipt> {
     if (!content || typeof content !== "string") throw new Error("Memory content is required");
     if (content.length > 100_000) throw new Error("Memory content exceeds 100KB limit");
     // Security: sanitize against prompt injection (same as MnemoPayLite)
@@ -1940,6 +1971,10 @@ export class MnemoPay extends EventEmitter {
     }));
     this.emit("memory:stored", { id: result.id, importance });
     this.log(`Stored memory: "${safeContent.slice(0, 60)}..." (id: ${result.id})`);
+    // Hosted MnemoPay does not mint local anchors — server-side anchoring
+    // is a separate roadmap item. Honour the overload so the type surface
+    // is uniform across MnemoPayLite + MnemoPay.
+    if (opts?.returnReceipt) return { id: result.id, anchor: undefined };
     return result.id;
   }
 

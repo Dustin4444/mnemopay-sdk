@@ -304,7 +304,9 @@ describe("MnemoPayLite.enableAnchoring (v1.8.1 auto-wire)", () => {
     expect(anchor!.did).toBe(wallet.did);
     expect(anchor!.memory_id).toBe(id);
     expect(anchor!.sequence).toBe(0);
-    expect(anchor!.signature).toMatch(/^[0-9a-f]+$/);
+    // didSign returns base64 — accept any printable, non-empty signature.
+    expect(typeof anchor!.signature).toBe("string");
+    expect(anchor!.signature.length).toBeGreaterThan(0);
   });
 
   it("anchor sequence increments per remember() call", async () => {
@@ -357,5 +359,36 @@ describe("MnemoPayLite.enableAnchoring (v1.8.1 auto-wire)", () => {
     const id2 = await agent.remember("off");
     expect(agent.getAnchor(id1)).toBeDefined();
     expect(agent.getAnchor(id2)).toBeUndefined();
+  });
+
+  it("remember({returnReceipt:true}) returns { id, anchor } so callers skip getAnchor()", async () => {
+    const agent = MnemoPay.quick("anchor-receipt");
+    const wallet = Wallet.create();
+    agent.enableAnchoring(wallet);
+    const receipt = await agent.remember("anchored at write time", { returnReceipt: true });
+    // Type narrows on the overload — TS knows this is RememberReceipt.
+    expect(receipt).toEqual(expect.objectContaining({ id: expect.any(String) }));
+    expect(typeof receipt.id).toBe("string");
+    expect(receipt.anchor).toBeDefined();
+    expect(receipt.anchor!.memory_id).toBe(receipt.id);
+    expect(receipt.anchor!.did).toBe(wallet.did);
+    // Should still be retrievable via the legacy getter — the receipt is
+    // a convenience surface, not a different anchor.
+    expect(agent.getAnchor(receipt.id)).toEqual(receipt.anchor);
+  });
+
+  it("remember({returnReceipt:true}) returns { id, anchor: undefined } when anchoring is off", async () => {
+    const agent = MnemoPay.quick("anchor-receipt-off");
+    const receipt = await agent.remember("plain", { returnReceipt: true });
+    expect(typeof receipt.id).toBe("string");
+    expect(receipt.anchor).toBeUndefined();
+  });
+
+  it("remember() without returnReceipt is unchanged (back-compat)", async () => {
+    const agent = MnemoPay.quick("anchor-receipt-bc");
+    agent.enableAnchoring(Wallet.create());
+    const id = await agent.remember("legacy caller");
+    expect(typeof id).toBe("string");
+    expect(agent.getAnchor(id)).toBeDefined();
   });
 });

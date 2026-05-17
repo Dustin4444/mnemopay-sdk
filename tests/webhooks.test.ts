@@ -161,6 +161,183 @@ describe("WebhookStore", () => {
   });
 });
 
+// The webhook pump starts a 2s setInterval on first store open. Even with a
+// stubbed fetch the first failure test settles ~5s due to module-init cost +
+// the unref'd interval interleaving. Give the describe headroom.
+describe("failure-event webhooks fire through executeTool", { timeout: 15000 }, () => {
+  // These tests prove that when a rail call inside the MCP tool handler
+  // throws, the store receives a *.failed delivery (and the error still
+  // propagates to the caller). Closes the gap left by 2026-05-12 when
+  // success-side events shipped but failure events were deferred.
+
+  let dir: string;
+  let prevEnv: string | undefined;
+  let prevFetch: typeof globalThis.fetch | undefined;
+
+  beforeEach(() => {
+    dir = makeTempDir();
+    prevEnv = process.env.MNEMOPAY_PERSIST_DIR;
+    process.env.MNEMOPAY_PERSIST_DIR = dir;
+    // The MCP server starts a 2s setInterval webhook pump on first store
+    // open. If a pump tick hits a real HTTP URL (example.com etc) it can
+    // stall the test for the full DELIVERY_TIMEOUT_MS (10s). Stub fetch
+    // with an instant 2xx so any pump tick during the test resolves fast.
+    prevFetch = (globalThis as any).fetch;
+    (globalThis as any).fetch = async () =>
+      new Response("", { status: 200 });
+  });
+
+  afterEach(async () => {
+    const { _resetWebhookStoreForTests } = await import("../src/mcp/server.js");
+    _resetWebhookStoreForTests();
+    if (prevEnv === undefined) delete process.env.MNEMOPAY_PERSIST_DIR;
+    else process.env.MNEMOPAY_PERSIST_DIR = prevEnv;
+    if (prevFetch !== undefined) (globalThis as any).fetch = prevFetch;
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  function makeFailingAgent(method: "charge" | "settle" | "refund", err: Error) {
+    return {
+      agentId: "agent_test_fail",
+      paymentRail: { name: "stripe" },
+      [method]: async () => {
+        throw err;
+      },
+    } as any;
+  }
+
+  it("charge.failed fires when agent.charge() throws and rethrows the error", async () => {
+    const mod = await import("../src/mcp/server.js");
+    const ws = mod.webhookStore();
+    ws.register("https://example.com/charge-failed-hook", ["charge.failed"]);
+    const agent = makeFailingAgent("charge", new Error("card_declined"));
+    (agent as any).charge = async () => {
+      throw Object.assign(new Error("card_declined"), { code: "RAIL_DECLINE" });
+    };
+    await expect(
+      mod.executeTool(agent, "charge", { amount: 19.99, reason: "test" })
+    ).rejects.toThrow("card_declined");
+
+    const counts = ws.countByStatus();
+    expect(counts.pending).toBeGreaterThanOrEqual(1);
+    const pending = ws.listDeliveries({ status: "pending" });
+    const failedDelivery = pending.find((d) => d.event === "charge.failed");
+    expect(failedDelivery).toBeTruthy();
+    const payload = JSON.parse(failedDelivery.payload);
+    expect(payload.error).toContain("card_declined");
+    expect(payload.errorCode).toBe("RAIL_DECLINE");
+    expect(payload.amount).toBe(19.99);
+    expect(payload.reason).toBe("test");
+    expect(payload.rail).toBe("stripe");
+    expect(payload.agentId).toBe("agent_test_fail");
+  });
+
+  it("settle.failed fires when agent.settle() throws and rethrows", async () => {
+    const mod = await import("../src/mcp/server.js");
+    const ws = mod.webhookStore();
+    ws.register("https://example.com/settle-failed-hook", ["settle.failed"]);
+    const agent = makeFailingAgent("settle", new Error("tx_not_found"));
+    await expect(
+      mod.executeTool(agent, "settle", { txId: "tx_missing" })
+    ).rejects.toThrow("tx_not_found");
+
+    const pending = ws.listDeliveries({ status: "pending" });
+    const failedDelivery = pending.find((d) => d.event === "settle.failed");
+    expect(failedDelivery).toBeTruthy();
+    const payload = JSON.parse(failedDelivery.payload);
+    expect(payload.txId).toBe("tx_missing");
+    expect(payload.error).toContain("tx_not_found");
+  });
+
+  it("refund.failed fires when agent.refund() throws and rethrows", async () => {
+    const mod = await import("../src/mcp/server.js");
+    const ws = mod.webhookStore();
+    ws.register("https://example.com/refund-failed-hook", ["refund.failed"]);
+    const agent = makeFailingAgent("refund", new Error("already_refunded"));
+    await expect(
+      mod.executeTool(agent, "refund", { txId: "tx_abc" })
+    ).rejects.toThrow("already_refunded");
+
+    const pending = ws.listDeliveries({ status: "pending" });
+    const failedDelivery = pending.find((d) => d.event === "refund.failed");
+    expect(failedDelivery).toBeTruthy();
+    const payload = JSON.parse(failedDelivery.payload);
+    expect(payload.txId).toBe("tx_abc");
+    expect(payload.error).toContain("already_refunded");
+  });
+
+  it("transfer.failed fires on Paystack rail failure (createTransferRecipient throws)", async () => {
+    const mod = await import("../src/mcp/server.js");
+    const ws = mod.webhookStore();
+    ws.register("https://example.com/transfer-failed-hook", ["transfer.failed"]);
+    const agent = {
+      agentId: "agent_payout_fail",
+      paymentRail: {
+        name: "paystack",
+        createTransferRecipient: async () => {
+          throw new Error("invalid_account_number");
+        },
+        initiateTransfer: async () => {
+          throw new Error("should_not_reach");
+        },
+      },
+    } as any;
+    await expect(
+      mod.executeTool(agent, "payout_create", {
+        amount: 100,
+        reason: "payout",
+        accountName: "test",
+        accountNumber: "0000000000",
+        bankCode: "044",
+      })
+    ).rejects.toThrow("invalid_account_number");
+
+    const pending = ws.listDeliveries({ status: "pending" });
+    const failedDelivery = pending.find((d) => d.event === "transfer.failed");
+    expect(failedDelivery).toBeTruthy();
+    const payload = JSON.parse(failedDelivery.payload);
+    expect(payload.stage).toBe("create_recipient");
+    expect(payload.error).toContain("invalid_account_number");
+    expect(payload.rail).toBe("paystack");
+  });
+
+  it("transfer.failed reports stage=initiate_transfer when initiateTransfer is what throws", async () => {
+    const mod = await import("../src/mcp/server.js");
+    const ws = mod.webhookStore();
+    ws.register("https://example.com/transfer-failed-hook-2", ["transfer.failed"]);
+    const agent = {
+      agentId: "agent_payout_fail_2",
+      paymentRail: {
+        name: "paystack",
+        createTransferRecipient: async () => ({ recipientCode: "RCP_abc", name: "test" }),
+        initiateTransfer: async () => {
+          throw new Error("insufficient_balance");
+        },
+      },
+    } as any;
+    await expect(
+      mod.executeTool(agent, "payout_create", {
+        amount: 100,
+        reason: "payout",
+        accountName: "test",
+        accountNumber: "0000000000",
+        bankCode: "044",
+      })
+    ).rejects.toThrow("insufficient_balance");
+
+    const pending = ws.listDeliveries({ status: "pending" });
+    const failedDelivery = pending.find((d) => d.event === "transfer.failed");
+    expect(failedDelivery).toBeTruthy();
+    const payload = JSON.parse(failedDelivery.payload);
+    expect(payload.stage).toBe("initiate_transfer");
+    expect(payload.recipientCode).toBe("RCP_abc");
+  });
+});
+
 describe("signPayload / verifySignature", () => {
   it("round-trip is correct", () => {
     const body = JSON.stringify({ hello: "world" });

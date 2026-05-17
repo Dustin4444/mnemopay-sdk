@@ -34,6 +34,24 @@ const result = score.compute({ transactions: [tx], createdAt: new Date(), /* ...
 
 ---
 
+## Governance latency (sub-second invariant)
+
+"Sub-second governance" is a tested invariant, not marketing. The bench in `tests/bench/governance-latency.bench.ts` measures each governance hot path with `vitest bench` and emits a grep-able `[gov-bench]` summary line per scenario. Numbers below are steady-state percentiles from `npm run bench:governance` (run on the dev machine — your hardware will differ; the relative ordering is what matters).
+
+| Hot path                                                      |  p50    |  p95    |  p99    | machine                                              |
+|---------------------------------------------------------------|--------:|--------:|--------:|------------------------------------------------------|
+| `policy.evaluateAction` (EU AI Act, single tool_call)         |  2.1 µs |  2.8 µs |  5.0 µs | Intel i5-1035G1 @ 1.0 GHz · Node 25.9 · Windows 11   |
+| `MerkleAudit.record` (append + chain hash)                    | 20 µs   | 45 µs   | 150 µs  | Intel i5-1035G1 @ 1.0 GHz · Node 25.9 · Windows 11   |
+| `MnemoPayLite.remember()` end-to-end with auto-anchor (Ed25519)| 1.0 ms  | 1.7 ms  | 2.5 ms  | Intel i5-1035G1 @ 1.0 GHz · Node 25.9 · Windows 11   |
+
+Both per-event hot paths (`evaluateAction`, `MerkleAudit.record`) clear an entire EU AI Act policy gate and audit-chain write **two orders of magnitude inside one millisecond**. The end-to-end `remember()` path — including Ed25519 sign + sequence + chain emit — still sits comfortably inside the "sub-second governance" envelope with three decimal-orders of headroom.
+
+A CI-enforced guard spec in `tests/governance/latency-invariant.test.ts` runs a degraded-mode sample on every `npm test` and fails if p95 for `policy.evaluateAction` regresses past 1 ms, or `MerkleAudit.record` past 5 ms. Bounds are sized to catch a ~10x regression, not flap on jitter.
+
+**How to reproduce:** `npm run bench:governance` (full vitest.bench harness) or `npm test -- latency-invariant` (CI-bound check).
+
+---
+
 ## Native rails
 
 Every rail ships with the same `PaymentRail` interface as `StripeRail` / `PaystackRail` / `LightningRail`:

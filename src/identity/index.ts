@@ -51,3 +51,10 @@ export {
   type ToAp2Input,
   type VerifyResult,
 } from "./ap2.js";
+
+export {
+  base58btcEncode,
+  base58btcDecode,
+  multibaseBase58btcEncode,
+  multibaseBase58btcDecode,
+} from "./multibase.js";

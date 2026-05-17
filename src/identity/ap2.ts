@@ -28,14 +28,11 @@
  *     that ergonomically worse. `toAp2Credential` still throws on bad input
  *     (matches `exportBundle` / `mintDid` behaviour from siblings).
  *
- * Constraint from the AP2 spec we can't fully represent yet (see the report):
- *   - `Ed25519Signature2020` mandates the signature be encoded as a Multibase
- *     base58btc string (`z…`). Node's `crypto.sign` returns raw bytes; we
- *     emit base64 for transport (the SDK's existing convention) and note
- *     this in the credential's `proof.type` neighbours. Verifiers that
- *     strictly enforce Multibase will need a base58btc shim — a 30-line
- *     fix in a follow-up release. Crypto bytes are identical; only the
- *     transport encoding differs.
+ * Wire format: `proof.proofValue` is a Multibase base58btc string (`z…`)
+ * per the W3C VC Data Integrity 1.0 spec for `Ed25519Signature2020`.
+ * Implemented via the inline encoder at `./multibase.js` (no new deps).
+ * Crypto bytes are identical to the underlying Node `crypto.sign` output;
+ * the encoding is what changes vs. raw base64.
  */
 
 import { createHash } from "node:crypto";
@@ -49,6 +46,10 @@ import {
   type Did,
 } from "./did.js";
 import { canonicalize } from "./bundle.js";
+import {
+  multibaseBase58btcDecode,
+  multibaseBase58btcEncode,
+} from "./multibase.js";
 import type { Charter } from "../governance/charter.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -113,9 +114,9 @@ export interface Ap2Credential {
     verificationMethod: `${Did}#keys-1`;
     proofPurpose: "assertionMethod";
     /**
-     * Base64-encoded Ed25519 signature over the canonical credential bytes
-     * (credential minus `proof.proofValue`). See module docstring for the
-     * Multibase note.
+     * Multibase base58btc-encoded Ed25519 signature (`z…`) over the canonical
+     * credential bytes (credential minus `proof.proofValue`). Per W3C VC Data
+     * Integrity 1.0 and AP2 v0.2.
      */
     proofValue: string;
   };
@@ -263,8 +264,12 @@ export function toAp2Credential(input: ToAp2Input): Ap2Credential {
   if (input.expirationDate !== undefined) credential.expirationDate = input.expirationDate;
 
   // Sign canonical bytes of the credential MINUS the proofValue field.
+  // `didSign` emits base64; AP2 / VC Data Integrity require Multibase
+  // base58btc (`z…`), so we transcode here.
   const canonical = canonicalize(credentialForSigning(credential));
-  credential.proof.proofValue = didSign(input.did, input.privateKey, canonical);
+  const sigBase64 = didSign(input.did, input.privateKey, canonical);
+  const sigBytes = Buffer.from(sigBase64, "base64");
+  credential.proof.proofValue = multibaseBase58btcEncode(sigBytes);
 
   return credential;
 }
@@ -352,8 +357,22 @@ export function verifyAp2Credential(
   if (!signature || typeof signature !== "string") {
     return { valid: false, error: "proof_invalid", detail: "missing proofValue" };
   }
+  // Decode Multibase base58btc (`z…`) → bytes → base64 for didVerify's
+  // existing base64-string contract. A malformed Multibase string is a
+  // structured proof_invalid, not a thrown error.
+  let signatureBase64: string;
+  try {
+    const sigBytes = multibaseBase58btcDecode(signature);
+    signatureBase64 = Buffer.from(sigBytes).toString("base64");
+  } catch (err: any) {
+    return {
+      valid: false,
+      error: "proof_invalid",
+      detail: `proofValue is not Multibase base58btc: ${err?.message || err}`,
+    };
+  }
   const canonical = canonicalize(credentialForSigning(credential));
-  const ok = didVerify(issuerId, signature, canonical, publicKey);
+  const ok = didVerify(issuerId, signatureBase64, canonical, publicKey);
   if (!ok) {
     return { valid: false, error: "proof_invalid" };
   }

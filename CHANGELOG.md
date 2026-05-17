@@ -4,34 +4,56 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [1.9.0] — 2026-05-17
 
 ### Added
 
+- **Failure-event webhooks** — `charge.failed`, `settle.failed`, `refund.failed`,
+  and `transfer.failed` now fire from the MCP tool handlers when the underlying
+  rail call throws. Payload includes the error message, error code, rail name,
+  agent id, and (for `transfer.failed`) a `stage` field distinguishing
+  `create_recipient` from `initiate_transfer` failures. Closes the 2026-05-12
+  follow-up that left failure-side events deferred while success-side shipped.
+  Errors still propagate to the caller — webhooks are fire-and-forget.
+
 - **AP2 verifiable-credential adapter (`identity/ap2`)** — converts MnemoPay
   DID + reputation + charter into a Google AP2 / FIDO-Alliance-compatible
-  signed credential. The 2026-05-17 agentic-AI research surfaced that Google's
-  Agents-Payments Protocol (now under FIDO Alliance) v0.2 docs explicitly
-  name agent identity as an unsolved production gap; MnemoPay's existing
-  DID + Wallet primitive closes that gap. New exports from
+  signed credential. Google's Agents-Payments Protocol (now under FIDO
+  Alliance) v0.2 names agent identity as an unsolved production gap; the
+  MnemoPay DID + Wallet primitive closes that gap. New exports from
   `@mnemopay/sdk/identity` (and re-exported from the root):
-  - `toAp2Credential(input)` — pure crypto, no I/O, no new deps; reuses the
-    SDK's existing Ed25519 path via `node:crypto`.
-  - `verifyAp2Credential(cred, { now?, publicKey? })` — returns a structured
-    `VerifyResult` with reason codes (`proof_invalid`, `expired`,
-    `not_yet_valid`, `key_mismatch`, `bad_did`, `malformed`).
-  - Types: `Ap2Credential`, `Ap2CredentialSubject`, `Ap2SpendingMandate`,
-    `Ap2Governance`, `ToAp2Input`, `Ap2VerifyError`, `VerifyResult`.
-  - 15 specs in `src/identity/ap2.test.ts` cover happy path, every failure
-    mode, charter hashing determinism, optional-field omission, and byte
-    stability across signings.
+  `toAp2Credential(input)`, `verifyAp2Credential(cred, { now?, publicKey? })`,
+  types `Ap2Credential`, `Ap2CredentialSubject`, `Ap2SpendingMandate`,
+  `Ap2Governance`, `ToAp2Input`, `Ap2VerifyError`, `VerifyResult`.
 
-### Known gaps
+- **AP2 proof encoding now Multibase base58btc** — the `Ed25519Signature2020`
+  `proof.proofValue` in AP2 verifiable credentials is now encoded as a
+  Multibase base58btc string (`z…`) per the W3C VC Data Integrity 1.0 spec.
+  Closes the "30-line follow-up" caveat in the original `identity/ap2`
+  module. New pure helpers `multibaseBase58btcEncode` / `Decode` (plus
+  `base58btcEncode` / `Decode`) exported from `@mnemopay/sdk/identity` —
+  zero new runtime dependencies. **Wire-format change**: clients verifying
+  credentials produced by SDK 1.8.x against 1.9.0 (or vice versa) will see
+  `proof_invalid` because the proofValue encoding differs. Re-mint
+  credentials after upgrade.
 
-- Proof encoding is base64 (matching the SDK's existing Ed25519 path) rather
-  than the Multibase base58btc string mandated by `Ed25519Signature2020`.
-  Signature bytes are identical; only the transport encoding differs. A
-  Multibase shim is a ~30-line follow-up.
+- **`remember({ returnReceipt: true })` overload** — `agent.remember()` now
+  optionally returns `{ id, anchor }` (typed `RememberReceipt`) instead of
+  just the memory id, so callers don't need a follow-up `getAnchor(id)`.
+  Backwards-compatible: callers without `returnReceipt` still get
+  `Promise<string>`. Implemented on both `MnemoPayLite` (mints real anchors
+  when `enableAnchoring()` has run) and `MnemoPay` (anchor is always
+  undefined — hosted server-side anchoring is a separate roadmap item).
+
+- **Published governance latency bench results (p50/p95/p99) in README**, plus
+  a CI-enforced invariant guard. The Phase-4 latency bench shipped in 1.8.2
+  but its numbers lived only in stdout. They now appear as a dated table in
+  README ("Governance latency (sub-second invariant)") and are protected by
+  `tests/governance/latency-invariant.test.ts`, which fails if p95 for
+  `policy.evaluateAction` exceeds 1 ms or `MerkleAudit.record` exceeds 5 ms.
+  New `bench:governance` npm script (`vitest bench --run
+  tests/bench/governance-latency.bench.ts`) gives reproducers a one-command
+  entrypoint. Reproducible via `npm run bench:governance`.
 
 ## [1.8.2] — 2026-05-16
 
