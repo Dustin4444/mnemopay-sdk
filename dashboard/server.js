@@ -2801,6 +2801,56 @@ async function handleRequest(req, res) {
     }
   }
 
+  // ── /api/v1/agent-fico/:agentId — public Agent FICO lookup ─────────────
+  // No auth required. Free read tier per the 2026-05-17 agentic-AI
+  // research synthesis (Finbold "FICO was built in 1989, agents need a
+  // score for 2026" — staking the category before anyone else names it).
+  //
+  // Returns { score: 300-850, tier, reputation, txCount, computedAt }.
+  // Derivation matches the SDK consumers (see dele-mobile-app/services/
+  // mnemopay.js): score = round(300 + reputation × 550); tier from
+  // reputation bands (starter <0.4 / building <0.6 / trusted <0.8 / verified).
+  //
+  // Paid API for credit-decisioning use lands in v1 with bearer auth +
+  // delta + risk reasons. v0 is the free signal lookup.
+  if (pathname.startsWith('/api/v1/agent-fico/') && req.method === 'GET') {
+    try {
+      const agentId = decodeURIComponent(pathname.slice('/api/v1/agent-fico/'.length)).slice(0, 200);
+      if (!agentId) return json(res, { ok: false, error: 'agentId required' }, 400);
+      // Use the same getAgent path that protects /api/profile but skip
+      // the request-scoped extractor — agentId is in the URL.
+      const inst = _sdkRef
+        ? _sdkRef.main.MnemoPay.quick(agentId)
+        : createFallbackAgent(agentId);
+      const profile = await Promise.resolve(inst.profile()).catch(() => null);
+      const balance = await Promise.resolve(inst.balance()).catch(() => null);
+      const rep = (balance && typeof balance.reputation === 'number')
+        ? balance.reputation
+        : (profile && typeof profile.reputation === 'number')
+          ? profile.reputation
+          : 0.5;
+      const clampedRep = Math.max(0, Math.min(1, Number(rep) || 0));
+      const score = Math.round(300 + clampedRep * 550);
+      const tier =
+        clampedRep >= 0.8 ? 'verified'
+        : clampedRep >= 0.6 ? 'trusted'
+        : clampedRep >= 0.4 ? 'building'
+        : 'starter';
+      return json(res, {
+        ok: true,
+        agentId,
+        score,
+        tier,
+        reputation: clampedRep,
+        txCount: profile?.txCount ?? null,
+        scheme: 'mnemopay-agent-fico/v1',
+        computedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      return errorJson(res, e);
+    }
+  }
+
   // ── /events/stream — SSE anomaly feed ───────────────────────────────────
   // Long-lived response. Emits audit events whose action matches anomaly /
   // fraud / risk for this accountId. Heartbeat every 30s as ":\n\n" so
