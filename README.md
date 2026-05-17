@@ -8,6 +8,12 @@ MnemoPay sits **above** the rail (Stripe, Paystack, Lightning, Stripe MPP, x402,
 npm install @mnemopay/sdk
 ```
 
+> **New here?** Start at [`docs/QUICKSTART.md`](./docs/QUICKSTART.md) — 60 seconds, three steps, working code.
+>
+> **Docs:** [Quickstart](./docs/QUICKSTART.md) · [Integrations (OpenAI/Anthropic/LangGraph/AutoGen)](./docs/INTEGRATIONS.md) · [Recall](./docs/RECALL.md) · [FiscalGate](./docs/FISCALGATE.md) · [Audit bundles (EU AI Act Art. 12)](./docs/AUDIT-BUNDLES.md) · [Subpath import rule](./docs/SUBPATH-IMPORT-RULE.md) · [Claude Agent SDK guide](./docs/agent-sdk-guide.md)
+>
+> **Community:** [LICENSE (Apache 2.0)](./LICENSE) · [CHANGELOG](./CHANGELOG.md) · [CONTRIBUTING](./CONTRIBUTING.md) · [CODE_OF_CONDUCT](./CODE_OF_CONDUCT.md) · [SECURITY](./SECURITY.md)
+
 ```ts
 import MnemoPay, {
   Charter, FiscalGate, MerkleAudit,        // governance primitives
