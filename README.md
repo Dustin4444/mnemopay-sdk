@@ -85,6 +85,49 @@ Use the root import when you want the full SDK surface. Use `@mnemopay/sdk/mcp` 
 
 ---
 
+## Swarm (alpha — build with us)
+
+`@mnemopay/sdk/swarm` is the missing piece that browse.sh shipped as a public skill catalog. Ours adds the bit they don't: every agent in the swarm carries a DID, every action is FiscalGate-prechecked against per-agent + total caps, every TaskResult is appended to a shared Article-12 audit chain, and every skill invocation is billable through the same hash-chained ledger the rest of the SDK already uses.
+
+```ts
+import { Swarm } from "@mnemopay/sdk/swarm";
+import { AuditChain } from "@mnemopay/sdk/governance";
+import { open } from "@mnemopay/browser";   // any BrowserProvider works
+
+const provider = await someProviderFactory();
+const swarm = new Swarm({
+  size: 4,
+  provider,
+  did: "did:mp:abc...",
+  budget: { perAgent: 0.25, total: 1.00 },
+  audit: { chain: new AuditChain() },
+});
+
+const run = await swarm.spawn([
+  { id: "t1", skillId: "ramp.com/expense-create",  prompt: "submit $42 lunch" },
+  { id: "t2", skillId: "linear/issue-create",      prompt: "file UI bug" },
+  { id: "t3", skillId: "cloudflare/dns-record-set", prompt: "add CNAME" },
+]);
+
+const results = await swarm.gather(run);
+const final   = await swarm.recombine(results, "merge-json");
+```
+
+**When to use it.** Any time you'd open N parallel browser sessions to attack a problem — multi-source research, cross-platform issue triage, A/B-style "ask three agents, take the majority answer" — but you want one audit bundle, one budget envelope, and one place where billing happens.
+
+**Three recombine strategies (plus your own).**
+- `first-success` — returns the output of the first `ok:true` task; perfect for race patterns where any answer is fine.
+- `majority-vote` — returns the most-common output across `ok:true` tasks; perfect for fact-extraction where consensus matters.
+- `merge-json` — deep-merges every `ok:true` object output with sorted keys (deterministic across runs).
+- `concat` — joins string outputs with `\n` in spawn order.
+- Or pass any `(results) => unknown` callback.
+
+**Skill catalog.** Public listings live at [mcp.mnemopay.com/skills](https://mcp.mnemopay.com/skills). The catalog is intentionally small and honestly marked — verified-partner badges only show after a real partnership is signed. Everything else carries `verified: false, status: 'pending-partner'` so you know exactly what trust tier you're getting.
+
+Alpha — public API may shift before 1.10.0 final. File issues at [github.com/mnemopay/mnemopay-sdk](https://github.com/mnemopay/mnemopay-sdk).
+
+---
+
 ## Building an MCP server? Start here.
 
 If you're shipping an MCP server and want to charge per-call — even sub-cent amounts — MnemoPay is built for you.

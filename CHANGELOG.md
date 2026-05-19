@@ -4,6 +4,45 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [1.10.0-alpha.0] — 2026-05-18
+
+### Added
+
+- **Swarm primitive (`@mnemopay/sdk/swarm`)** — the missing piece browse.sh /
+  Browserbase shipped as a "public skill catalog + fleet of headless browsers."
+  Ours sits on top of that and adds the trust + audit + per-skill billing layer
+  they don't ship. New exports:
+  - `Swarm` class with `spawn(tasks) → SwarmRun`, `gather(run) → TaskResult[]`,
+    `recombine(results, strategy)`, and `stop(run, reason)`.
+  - `FiscalGate.precheck(budgetUsd, requestedUsd)` — static budget gate, mirrors
+    the per-session shape from `@mnemopay/browser` so the SDK has no runtime dep
+    on the browser package.
+  - Four built-in recombine strategies — `first-success`, `majority-vote`,
+    `merge-json`, `concat` — all deterministic. Plus an arbitrary callback
+    `(results) => unknown` for custom recombination.
+  - Audit-chain integration: every completed task appends a `swarm.task` event;
+    `stop()` appends `swarm.stop`. Both are best-effort — audit chain failures
+    never crash the swarm.
+  - Per-task FiscalGate precheck BEFORE any session opens. Tasks above the
+    per-agent budget are stamped `budget-denied` and never touch the provider.
+  - Total-budget envelope across the whole run — exceeding mid-run triggers a
+    graceful `stop()` against every in-flight task.
+- **Supertonic voice scaffold (`@mnemopay/sdk/swarm/voice`)** — optional
+  per-task narration. When `SUPERTONIC_BIN` is set and the binary is on PATH,
+  `annotateResult(result)` shells out, captures the transcript, and writes it
+  back to `TaskResult.voice`. Silent no-op when not configured. Lazy-loaded
+  via `await import("./voice.js")` so the swarm pays zero startup cost when
+  voice isn't wired.
+- **New subpath exports** — `@mnemopay/sdk/swarm` and `@mnemopay/sdk/swarm/voice`.
+
+### Notes
+
+- Alpha. Public surface MAY shift before 1.10.0 final. Build with us at
+  https://github.com/mnemopay/mnemopay-sdk.
+- The skill catalog itself is hosted at https://mcp.mnemopay.com/skills — every
+  row in v0.1 is honestly marked `verified: false, status: 'pending-partner'`
+  until a real partnership is signed. No fake verified-by-Ramp claims.
+
 ## [1.9.0] — 2026-05-17
 
 ### Added
