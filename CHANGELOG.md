@@ -4,6 +4,149 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [1.11.0] — 2026-05-21
+
+Consolidates [1.11.0-alpha.0] and [1.11.0-alpha.1] into a stable release.
+Public API is now frozen for the 1.11.x line.
+
+### Added
+
+- **Gemini middleware (`@mnemopay/sdk/middleware/gemini`)** — memory-injecting
+  wrapper for `@google/generative-ai` clients. Same shape as the existing
+  OpenAI / Anthropic `wrap` middlewares: `GeminiMiddleware.wrap(genAI, agent,
+  { recallLimit? })` returns a proxy whose every `getGenerativeModel(...)`
+  returns a model with `generateContent` (and `startChat().sendMessage`)
+  auto-injecting recalled memories into `systemInstruction` and storing the
+  exchange via `agent.remember(...)`. Unlocks MnemoPay for Build with Gemini
+  XPRIZE submissions.
+  ```ts
+  import { GoogleGenerativeAI } from "@google/generative-ai";
+  import { GeminiMiddleware } from "@mnemopay/sdk/middleware/gemini";
+
+  const raw = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
+  const genAI = GeminiMiddleware.wrap(raw, agent);
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  const r = await model.generateContent("Plan my Tuesday.");
+  ```
+- **`@google/generative-ai` declared as `peerDependenciesMeta.optional`** —
+  install the SDK without it; install `@google/generative-ai` only when you
+  actually use the Gemini middleware.
+- **10 new tests** in `tests/middleware/gemini.test.ts` covering wrap shape,
+  recall hook, custom `recallLimit`, systemInstruction injection (default
+  + caller-supplied), `agent.remember` write, provider-error short-circuit,
+  passthrough response, non-blocking `remember` failures, and the
+  `startChat().sendMessage` chat-session path. Mocked Google SDK — no real
+  network calls.
+
+### Promoted from alpha
+
+All of the following landed in 1.11.0-alpha.0 (2026-05-19) and are now
+stable. No API changes between alpha and 1.11.0.
+
+## [1.11.0-alpha.0] — 2026-05-19
+
+### Added
+
+- **BrowserSwarm (`@mnemopay/sdk/swarm/browser`)** — extends the v0.1 `Swarm`
+  with native browser-session orchestration. New surface:
+  - `BrowserSwarm extends Swarm` — `spawn(BrowserTask[])` now opens N parallel
+    browser sessions (one per task), each session driven by a typed step
+    sequence: `goto` / `act` / `extract` / `screenshot` / `wait`.
+  - `BrowserTaskResult` carries `finalUrl`, `screenshots: string[]` (base64
+    PNGs from screenshot steps), `extractedData: unknown[]` (one entry per
+    extract step) — in addition to the inherited `ok` / `spend` / `auditRef`
+    / `error`.
+  - Wires through `@mnemopay/browser` (optional peer dep, lazy-imported) for
+    real session lifecycle. Stagehand / local Playwright / Browserbase all
+    routable via `cfg.browser.provider`.
+  - Per-step audit-chain events (`browser.step` with `{taskId, stepType, ts,
+    success, ...stepDetails}`) plus the existing per-task `swarm.task` event.
+  - Per-session billing-meter wiring (`emitStart` / `emitEnd`) — best effort;
+    meter failures never block tasks.
+  - Per-session failure isolation — one bad step or open() failure marks
+    that task `ok:false` and `error: "provider-error: ..."` but lets sibling
+    sessions complete cleanly.
+  - Per-agent FiscalGate.precheck + total-budget envelope inherited from
+    base `Swarm`. Denied tasks never open a session.
+- **`@mnemopay/browser` added as `peerDependenciesMeta.optional`** — install
+  the SDK without it; install `@mnemopay/browser` (which transitively pulls
+  Playwright) only when you actually use `BrowserSwarm`.
+- **5 new tests** in `src/swarm/browser.test.ts` covering parallel-N session
+  open, per-session budget enforcement, full step sequence execution,
+  audit-chain integration, and per-session failure isolation. All run
+  against a mock surface — no Playwright in CI.
+- **File-backed `AuditChain` (`@mnemopay/sdk/governance/audit-chain`)** — the
+  constructor now accepts `{ path?: string }`. When provided, every `emit()`
+  appends the event as one JSONL line to that path (`appendFileSync`,
+  best-effort sync; disk failures `console.warn` and never throw). The
+  in-memory tail is preserved so `rollMerkleRoot()` / `toBundle()` behave
+  identically to the in-memory-only mode. New method `rollAndExport({
+  pathOut, meta? })` writes a JSON snapshot of the full bundle. Replaces the
+  25-line `FileAuditChain` shim that bizsuite-site + mcp-gateway were
+  carrying as a downstream subclass.
+  ```ts
+  import { AuditChain } from "@mnemopay/sdk/governance/audit-chain";
+  const chain = new AuditChain({ path: "./.audit-chain/llm.jsonl" });
+  ```
+- **Streaming interception in audit-only middleware** — both
+  `AnthropicMiddleware.audit(...)` and `OpenAIMiddleware.audit(...)` now wrap
+  the streaming surfaces:
+  - `client.messages.stream(...)` (Anthropic) — taps the async iterator,
+    accumulates `text_delta` chunks + `message_start` / `message_delta`
+    usage, emits exactly one `llm.call` event at close with `streaming:
+    true` and `partial: false`. Consumer-cancelled streams emit `partial:
+    true` with tokens-so-far.
+  - `client.chat.completions.create({ stream: true })` (OpenAI) — same
+    shape; set `stream_options: { include_usage: true }` to surface the
+    final usage block, otherwise `output_tokens` falls back to chunk count.
+  - The wrapper does NOT change the streaming API surface — consumers still
+    `for await (...)` exactly as before. Closes the silent audit gap in
+    1.10.1-alpha.0 (only `.create` was intercepted; `.stream` bypassed).
+- **4 new tests** in `tests/middleware-stream-audit.test.ts` covering
+  Anthropic + OpenAI full-stream and cancelled-stream paths against mock
+  providers (no `@anthropic-ai/sdk` or `openai` required in CI).
+- **2 new tests** in `tests/audit-chain.test.ts` covering path-backed
+  append + back-compat in-memory mode.
+
+### Notes
+
+- Alpha — public API may shift before 1.11.0 final. Build with us.
+- BrowserSwarm does NOT modify the v0.1 `Swarm` class; it only extends it.
+- Stagehand's natural-language `act()` and `extract()` route through the
+  surface's `evaluate()` shape so the underlying provider can dispatch
+  appropriately — no second action vocabulary on the SDK side.
+
+## [1.10.1-alpha.0] — 2026-05-18
+
+### Added
+
+- **Audit-only middleware variants** — `AnthropicMiddleware.audit(client, opts)`
+  and `OpenAIMiddleware.audit(client, opts)`, exposed as new subpath exports
+  `@mnemopay/sdk/middleware/anthropic-audit` and `@mnemopay/sdk/middleware/openai-audit`.
+  Unlike the original `.wrap(...)` variants, the audit factories:
+  - Forward every `messages.create` / `chat.completions.create` call **unchanged** —
+    no system-prompt injection, no memory recall, no conversation persistence.
+  - Append a signed `llm.call` event to `opts.chain` (an `AuditChain` instance)
+    with `{provider, model, input_tokens, output_tokens, cost_estimate_usd,
+    request_hash, response_hash, ts}`. `cost_estimate_usd` uses the existing
+    `MODEL_PRICING` table (Anthropic models priced, OpenAI returns `null` until
+    that table is expanded).
+  - Default `opts.redact === true` strips raw prompt/response text from the
+    hash inputs so the audit log carries structural fingerprints only — safe
+    for compliance contexts that forbid PII persistence.
+  - `opts.chain` omitted ⇒ silent no-op. Audit-append exceptions are caught and
+    logged via `console.warn`, never propagated to the LLM caller.
+  - Use cases: chat widgets / regulated-enterprise pipelines where the operator
+    has manually tuned the system prompt and ANY mutation is a violation, but
+    Article-12 telemetry is still required (CA Delete Act / EU AI Act surfaces).
+
+### Changed
+
+- **Vitest include glob widened** to `["**/*.test.ts", "**/*.spec.ts"]` so the
+  pre-existing `src/swarm/swarm.spec.ts` (14 tests) is picked up by the default
+  `npm test` run. No tests were lost prior — the swarm tests were running via
+  ad-hoc invocations.
+
 ## [1.10.0-alpha.0] — 2026-05-18
 
 ### Added

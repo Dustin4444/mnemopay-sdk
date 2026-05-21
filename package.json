@@ -1,7 +1,7 @@
 {
   "name": "@mnemopay/sdk",
   "mcpName": "com.mnemopay/sdk",
-  "version": "1.10.0-alpha.0",
+  "version": "1.11.0",
   "description": "Production payment infrastructure for AI agents — real Stripe/Paystack/Lightning rails, autonomous shopping with escrow, Agent Credit Score (300-850), Ed25519 identity, behavioral finance, Merkle integrity, anomaly detection, human-in-the-loop approval. Battle-tested.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -17,6 +17,18 @@
     "./middleware/anthropic": {
       "import": "./dist/middleware/anthropic.js",
       "types": "./dist/middleware/anthropic.d.ts"
+    },
+    "./middleware/anthropic-audit": {
+      "import": "./dist/middleware/anthropic-audit.js",
+      "types": "./dist/middleware/anthropic-audit.d.ts"
+    },
+    "./middleware/openai-audit": {
+      "import": "./dist/middleware/openai-audit.js",
+      "types": "./dist/middleware/openai-audit.d.ts"
+    },
+    "./middleware/gemini": {
+      "import": "./dist/middleware/gemini.js",
+      "types": "./dist/middleware/gemini.d.ts"
     },
     "./langgraph": {
       "import": "./dist/langgraph/tools.js",
@@ -89,6 +101,10 @@
     "./swarm/voice": {
       "import": "./dist/swarm/voice.js",
       "types": "./dist/swarm/voice.d.ts"
+    },
+    "./swarm/browser": {
+      "import": "./dist/swarm/browser.js",
+      "types": "./dist/swarm/browser.d.ts"
     }
   },
   "bin": {
@@ -169,9 +185,11 @@
   "homepage": "https://github.com/mnemopay/mnemopay-sdk",
   "peerDependencies": {
     "@anthropic-ai/sdk": ">=0.20.0",
+    "@google/generative-ai": ">=0.21.0",
     "@langchain/core": ">=0.2.0",
     "@langchain/langgraph": ">=0.1.0",
     "@langchain/openai": ">=0.1.0",
+    "@mnemopay/browser": ">=0.1.0-alpha.0",
     "openai": ">=4.0.0",
     "pg": ">=8.0.0",
     "stripe": ">=14.0.0",
@@ -184,6 +202,9 @@
     "@anthropic-ai/sdk": {
       "optional": true
     },
+    "@google/generative-ai": {
+      "optional": true
+    },
     "@langchain/core": {
       "optional": true
     },
@@ -191,6 +212,9 @@
       "optional": true
     },
     "@langchain/openai": {
+      "optional": true
+    },
+    "@mnemopay/browser": {
       "optional": true
     },
     "zod": {
