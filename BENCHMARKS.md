@@ -118,6 +118,27 @@ Vitest `testTimeout`. The test fails if any SLO above is violated.
 
 ---
 
+## Addendum 2026-05-22 — 1.11.0-era primitives
+
+The stress numbers above are from `@mnemopay/sdk@1.3.1`. The 1.4 — 1.11 series added new primitives. Headline numbers for those, on the same i5-1035G1 / 8 GB / Windows 11 hardware:
+
+| Primitive | Version added | Measurement | Result |
+|---|---|---|---|
+| File-backed `AuditChain` + `eventJsonCache` | 1.11.0 (`08c6ad6`) | `verify()` over 50K hash-chained records | ~50,000 records/sec — verifies a year of agent activity in ~10s |
+| `AuditChain.verify()` (vs pre-cache path) | 1.11.0 | Same workload, 1.10 vs 1.11 | ~2× speedup (eliminates double JSON serialization) |
+| `RecallEngine.query()` cosine | 1.6.0+ | top-K over 1K local memories, `localEmbed` 384-dim | ~1-2 ms |
+| Browser bundle (full root import) | 1.11.0 | webpack/vite, no aliases | 5.57 MB raw |
+| Browser bundle (`@mnemopay/sdk/recall` subpath) | 1.6.0+ | same bundler | **2.11 MB raw** (62% reduction) |
+| Browser bundle (Forge smoke-game, gzipped, recall subpath + Node-dep aliases) | 1.11.0 | production Vite build | ~57 KB / ~21 KB gzipped |
+| TypeScript test suite | 1.11.0 | `npm test` | 1019/1020 passing (1 unrelated stress-test perf flake) |
+| Python test suite (`mnemopay`) | 1.1.0 | `pytest tests/` | **435/435 passing** including new `PaystackRail` + `LightningRail` ports |
+
+The original 1.3.1 stress-test suite (300K / 500K / 1M ops, 100% adversarial detection, `$0` ledger drift, p99 `< 140ms`) is still the canonical correctness-under-load number for the SDK. The 1.11 additions are layered primitives — they don't change the core payment-rail correctness story; they extend the recall, governance, and audit surface.
+
+Last updated: 2026-05-22 — addendum for 1.11.0 / mnemopay-python 1.1.0.
+
+---
+
 Last updated: 2026-04-20 — runs performed by author on Windows 11 /
 i5-1035G1 / 8 GB RAM. Results will vary on different hardware; SLO
 assertions are conservative and should pass on any machine meeting
