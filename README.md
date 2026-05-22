@@ -12,7 +12,9 @@ npm install @mnemopay/sdk
 >
 > **Docs:** [Quickstart](./docs/QUICKSTART.md) · [Integrations (OpenAI/Anthropic/LangGraph/AutoGen)](./docs/INTEGRATIONS.md) · [Recall](./docs/RECALL.md) · [FiscalGate](./docs/FISCALGATE.md) · [Audit bundles (EU AI Act Art. 12)](./docs/AUDIT-BUNDLES.md) · [Subpath import rule](./docs/SUBPATH-IMPORT-RULE.md) · [Claude Agent SDK guide](./docs/agent-sdk-guide.md)
 >
-> **Community:** [LICENSE (Apache 2.0)](./LICENSE) · [CHANGELOG](./CHANGELOG.md) · [CONTRIBUTING](./CONTRIBUTING.md) · [CODE_OF_CONDUCT](./CODE_OF_CONDUCT.md) · [SECURITY](./SECURITY.md)
+> **Community:** [LICENSE (Apache 2.0)](./LICENSE) · [CHANGELOG](./CHANGELOG.md) · [CONTRIBUTING](./CONTRIBUTING.md) · [CODE_OF_CONDUCT](./CODE_OF_CONDUCT.md) · [SECURITY](./SECURITY.md) · [Discussions](https://github.com/mnemopay/mnemopay-sdk/discussions) · [Good first issues](https://github.com/mnemopay/mnemopay-sdk/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)
+>
+> **Receipts:** [Trust hub](https://mnemopay.com/trust) (entity, KYB, Apple Team ID, Article 12 audit chain — verify in <5 min) · [Benchmarks](./BENCHMARKS.md) (1M ops, 100% adversarial detection, $0 ledger drift) · [Python SDK on PyPI](https://pypi.org/project/mnemopay/) (full TS-rail parity since 1.1.0)
 
 ```ts
 import MnemoPay, {
