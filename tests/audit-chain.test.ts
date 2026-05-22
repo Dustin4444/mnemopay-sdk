@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AuditChain, verifyBundle, canonicalize, sha256Hex } from "../src/governance/audit-chain.js";
 
 describe("AuditChain.emit", () => {
@@ -70,5 +73,52 @@ describe("rollMerkleRoot + verifyBundle", () => {
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("bad_event_signature");
+  });
+});
+
+describe("AuditChain — file-backed", () => {
+  it("path-backed: every emit appends one JSONL line + bundle still verifies", () => {
+    const dir = mkdtempSync(join(tmpdir(), "audit-chain-test-"));
+    const path = join(dir, "nested", "llm.jsonl");
+    try {
+      const chain = new AuditChain({ path });
+      const a = chain.emit("llm.call", { tokens: 100 });
+      const b = chain.emit("llm.call", { tokens: 200 });
+      const c = chain.emit("llm.call", { tokens: 50 });
+
+      expect(existsSync(path)).toBe(true);
+      const lines = readFileSync(path, "utf8").trim().split("\n");
+      expect(lines.length).toBe(3);
+      const parsed = lines.map((l) => JSON.parse(l));
+      expect(parsed[0].id).toBe(a.id);
+      expect(parsed[1].id).toBe(b.id);
+      expect(parsed[2].id).toBe(c.id);
+      expect(parsed[0].payload.tokens).toBe(100);
+
+      // In-memory tail must remain intact — bundle verifies.
+      const bundle = chain.toBundle();
+      expect(bundle.events.length).toBe(3);
+      expect(verifyBundle(bundle).ok).toBe(true);
+
+      // rollAndExport writes the bundle snapshot.
+      const out = join(dir, "bundle.json");
+      const exported = chain.rollAndExport({ pathOut: out });
+      expect(existsSync(out)).toBe(true);
+      const onDisk = JSON.parse(readFileSync(out, "utf8"));
+      expect(onDisk.events.length).toBe(3);
+      expect(onDisk.merkle_root).toBe(exported.merkle_root);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("back-compat: no path → behaves identically to prior in-memory chain", () => {
+    const chain = new AuditChain();
+    chain.emit("a", { v: 1 });
+    chain.emit("b", { v: 2 });
+    const bundle = chain.toBundle();
+    expect(bundle.events.length).toBe(2);
+    expect(bundle.merkle_root).toMatch(/^[0-9a-f]{64}$/);
+    expect(verifyBundle(bundle).ok).toBe(true);
   });
 });

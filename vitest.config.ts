@@ -11,6 +11,9 @@ export default defineConfig({
         execArgv: ["--expose-gc"],
       },
     },
-    include: ["**/*.test.ts"],
+    // .spec.ts widened in 1.10.1-alpha.0 so src/swarm/swarm.spec.ts (14 tests)
+    // is picked up by the default `npm test` run. Pre-existing .test.ts globs
+    // still match — this is additive.
+    include: ["**/*.test.ts", "**/*.spec.ts"],
   },
 });

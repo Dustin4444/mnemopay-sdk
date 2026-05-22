@@ -17,6 +17,8 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 export interface ChainEvent {
   /** UUIDv4. */
@@ -40,16 +42,49 @@ export interface ChainSinkOptions {
   signer?: (payload: string) => string;
   /** Optional fixed sequence start — defaults to 0. */
   sequence_start?: number;
+  /**
+   * Optional file path. When provided, every `emit()` appends the event as a
+   * single JSONL line to that path using `appendFileSync` (best-effort sync;
+   * disk failures are logged via `console.warn` and never propagated). The
+   * in-memory tail is preserved so `rollMerkleRoot()` / `toBundle()` behave
+   * identically to the in-memory-only mode.
+   *
+   * Replaces the consumer-side `FileAuditChain` shim that several downstream
+   * apps (bizsuite-site, mcp-gateway) were carrying as a 25-line subclass.
+   */
+  path?: string;
 }
 
 export class AuditChain {
   private readonly _events: ChainEvent[] = [];
   private readonly opts: ChainSinkOptions;
   private nextSequence: number;
+  /**
+   * Per-event cached sha256(canonicalize(event)). Populated at `emit()` so
+   * `rollMerkleRoot()` only has to walk the tree levels — the per-event
+   * canonical + leaf-hash work happens once. Verifiers (verifyBundle)
+   * recompute from scratch because they take an external bundle without
+   * this cache.
+   */
+  private readonly _leafHashes: string[] = [];
 
   constructor(opts: ChainSinkOptions = {}) {
     this.opts = opts;
     this.nextSequence = opts.sequence_start ?? 0;
+    if (opts.path) {
+      // Best-effort: ensure the parent directory exists. A failure here
+      // (read-only fs, bad path) is logged but does not throw — emit()
+      // itself swallows disk failures by the same invariant.
+      try {
+        mkdirSync(dirname(opts.path), { recursive: true });
+      } catch (err) {
+        console.warn(
+          "[mnemopay/governance/audit-chain] mkdir failed for",
+          opts.path,
+          (err as Error).message,
+        );
+      }
+    }
   }
 
   emit(kind: string, payload: Record<string, unknown>, parent_id?: string): ChainEvent {
@@ -62,9 +97,27 @@ export class AuditChain {
       ...(parent_id ? { parent_id } : {}),
     };
     if (this.opts.signer) {
-      draft.signature = this.opts.signer(canonicalize(draft));
+      // Canonicalize once; reuse for both signer + leaf hash.
+      const canonical = canonicalize(draft);
+      draft.signature = this.opts.signer(canonical);
+      // The signature was added AFTER canonicalize, so the leaf hash must
+      // re-canonicalize to include it. Match verifyBundle's behavior.
+      this._leafHashes.push(sha256Hex(canonicalize(draft)));
+    } else {
+      this._leafHashes.push(sha256Hex(canonicalize(draft)));
     }
     this._events.push(draft);
+    // Optional file-backed sink — append-only JSONL. Best-effort; never throws.
+    if (this.opts.path) {
+      try {
+        appendFileSync(this.opts.path, JSON.stringify(draft) + "\n");
+      } catch (err) {
+        console.warn(
+          "[mnemopay/governance/audit-chain] disk append failed:",
+          (err as Error).message,
+        );
+      }
+    }
     return draft;
   }
 
@@ -75,7 +128,8 @@ export class AuditChain {
   /** Roll a tree-Merkle root over emitted events. Empty stream → "". */
   rollMerkleRoot(): string {
     if (this._events.length === 0) return "";
-    let layer = this._events.map((e) => sha256Hex(canonicalize(e)));
+    // Leaf hashes were cached at emit() time. Walk the tree.
+    let layer: string[] = this._leafHashes.slice();
     while (layer.length > 1) {
       const next: string[] = [];
       for (let i = 0; i < layer.length; i += 2) {
@@ -99,6 +153,26 @@ export class AuditChain {
       events: this._events.slice(),
       merkle_root: this.rollMerkleRoot(),
     };
+  }
+
+  /**
+   * Roll the full bundle and write it to `pathOut` as a single JSON document.
+   * Useful for offline Article-12 export when the rolling JSONL is the live
+   * stream and a snapshot bundle is what the regulator actually receives.
+   *
+   * Returns the bundle that was written.
+   */
+  rollAndExport<TMeta extends Record<string, unknown> = Record<string, unknown>>(
+    args: { pathOut: string; meta?: TMeta },
+  ): ChainBundle<TMeta> {
+    const bundle = this.toBundle<TMeta>(args.meta ?? ({} as TMeta));
+    try {
+      mkdirSync(dirname(args.pathOut), { recursive: true });
+    } catch {
+      /* best-effort */
+    }
+    writeFileSync(args.pathOut, JSON.stringify(bundle, null, 2));
+    return bundle;
   }
 }
 

@@ -124,7 +124,44 @@ const final   = await swarm.recombine(results, "merge-json");
 
 **Skill catalog.** Public listings live at [mcp.mnemopay.com/skills](https://mcp.mnemopay.com/skills). The catalog is intentionally small and honestly marked — verified-partner badges only show after a real partnership is signed. Everything else carries `verified: false, status: 'pending-partner'` so you know exactly what trust tier you're getting.
 
-Alpha — public API may shift before 1.10.0 final. File issues at [github.com/mnemopay/mnemopay-sdk](https://github.com/mnemopay/mnemopay-sdk).
+### BrowserSwarm — native browser-session fan-out (1.11.0-alpha.0)
+
+`@mnemopay/sdk/swarm/browser` extends `Swarm` with a typed step sequence (`goto` / `act` / `extract` / `screenshot` / `wait`) per task and a lazy wire to `@mnemopay/browser` (optional peer dep — installing the SDK does NOT pull Playwright). Each task gets its own browser session, every step appends a `browser.step` event to the shared audit chain, and a thrown step kills only that one task — sibling sessions keep running. Alpha; build with us.
+
+```ts
+import { BrowserSwarm } from "@mnemopay/sdk/swarm/browser";
+const swarm = new BrowserSwarm({
+  size: 3, provider: undefined as never,
+  budget: { perAgent: 0.25, total: 1.00 },
+  browser: { provider: "stagehand" },
+});
+const run = await swarm.spawn([
+  { id: "amzn", prompt: "amazon price",  steps: [{type:"goto", url:"https://amazon.com/dp/X"},  {type:"extract", selector:"#priceblock_ourprice"}] },
+  { id: "bby",  prompt: "best buy price", steps: [{type:"goto", url:"https://bestbuy.com/site/X"},{type:"extract", selector:".priceView-customer-price"}] },
+  { id: "tgt",  prompt: "target price",   steps: [{type:"goto", url:"https://target.com/p/X"},   {type:"extract", selector:"[data-test=product-price]"}] },
+]);
+const results = await swarm.gather(run);   // BrowserTaskResult[] with .screenshots + .extractedData
+```
+
+Alpha — public API may shift before 1.11.0 final. File issues at [github.com/mnemopay/mnemopay-sdk](https://github.com/mnemopay/mnemopay-sdk).
+
+### Audit-only middleware — `.audit(client)` with streaming + on-disk chain (1.11.0-alpha.0)
+
+For chat widgets and regulated pipelines where ANY prompt mutation is a violation but Article-12 telemetry is still required:
+
+```ts
+import { AuditChain } from "@mnemopay/sdk/governance/audit-chain";
+import { AnthropicMiddleware } from "@mnemopay/sdk/middleware/anthropic-audit";
+
+const chain = new AuditChain({ path: "./.audit-chain/llm.jsonl" });  // file-backed since 1.11.0-alpha.0
+const client = AnthropicMiddleware.audit(new Anthropic(), { chain });
+
+// .create AND .stream now both emit one `llm.call` event per call. Streams
+// that get cancelled mid-iteration emit `partial: true` with tokens-so-far.
+for await (const chunk of client.messages.stream({ model, max_tokens, messages })) { /* ... */ }
+```
+
+`@mnemopay/sdk/middleware/openai-audit` exposes the equivalent shape for OpenAI — `chat.completions.create({ stream: true })` is intercepted automatically (pass `stream_options: { include_usage: true }` to capture the final usage block).
 
 ---
 
