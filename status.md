@@ -1,4 +1,21 @@
+# mnemopay-sdk status - 2026-05-21 Antigravity (J&B Enterprise Unified Flywheel Strategy & Daily Execution Playbook)
+
+## 1. Unified J&B Enterprise Flywheel Strategy Formulation
+- **Ecosystem Synthesis:** Formulated the canonical strategic vision connecting **BizSuite, MnemoPay, Dele, and Linger** into a self-reinforcing flywheel under J&B Enterprise LLC. Codified fully in [mnemopay_strategic_vision.md](file:///C:/Users/bizsu/.gemini/antigravity/brain/3e2360d6-2900-4054-8560-16fa12157645/mnemopay_strategic_vision.md) and recorded in [walkthrough.md](file:///C:/Users/bizsu/.gemini/antigravity/brain/3e2360d6-2900-4054-8560-16fa12157645/walkthrough.md).
+- **BizSuite (`getbizsuite.com`) Re-Alignment:** Repositioned as a Done-For-You (DFY) AI-Native Transformation Agency and Creator/Driver Monetization Hub. Established a staged pricing ladder: $49-$199 low-ticket Monetization/QR Page setups + $19/mo hosting, $299-$999/mo automated B2B clipping retainers, and upsells to $997 AI Audits and $9,500+ Sprints.
+- **MnemoPay (`mnemopay.com`) Trust Restoration:** Standardized the protocol to clear the Scamadviser phishing flag through formal IPQS disputes, deploying `/trust` transparency landing sections, and developer feature bounties in `mnemopay-sdk`. Every enterprise sprint BizSuite builds natively embeds MnemoPay, driving transaction volumes and Pro/Growth SaaS conversions.
+- **Dele Superapp & Driver QR Loop:** Setup driver headrest QR card tipping and local commerce funnels linked to BizSuite pages, routed instantly via MnemoPay rails. Prepared individual-to-organization developer account migration using the J&B Enterprise LLC D-U-N-S record to clear Apple's transport/financial app blocks.
+- **Linger dating app Letters Pivot:** Redesigned Linger entirely under the slow-social pen-pal **"Letters" Concept (Concept A)**: one 500-char letter daily, no photos until Day 4, curated dates on Day 7, and mandatory Stripe Identity signup verification to bypass Apple's Guideline 4.3 spam rejections.
+
+## 2. Operational Playbook: "What We Do"
+Defined a clear operational split between AI Agent background execution and Founder manual steps:
+- **AI Agent Background Execution (Active):** Running daily Hunter crons (30 leads/day), sending personalized humanized cold emails (Maileroo), generating hook-selected social clips (TikTok, Reels, Shorts), and monitoring developer forums for agent memory/RN-crash replies.
+- **Jeremiah's Founder Responsibilities (High-Leverage CTAs):** Recording daily 3-minute vertical videos/voice memos, approving queued drafts, and executing one-time setups (Stripe Identity, Apple Team Org migration, NameCheap DNS TXT key update, and Meta Graph Instagram token re-authentication).
+
+---
+
 # mnemopay-sdk status - 2026-05-21 Antigravity (Python Rails Port, Governance Optimization, & App Store Connect Diagnostic)
+
 
 ## 1. Zero-Dependency Python Rails Port & Parity (`mnemopay-python`)
 - **Paystack & Lightning payment rails** completely implemented in `mnemopay-python` matching the TypeScript SDK functionality with 100% parity.
