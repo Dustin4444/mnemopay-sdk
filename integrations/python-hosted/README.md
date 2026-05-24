@@ -36,22 +36,22 @@ client = MnemoPayHostedClient()
 
 client.remember(
     "Linger uses MnemoPay to let NPCs remember player choices.",
-    namespace="forge-npc:maya",
-    tags=["forge", "npc"],
+    namespace="augengine-npc:maya",
+    tags=["augengine", "npc"],
 )
 
 results = client.recall(
     "What should Maya remember about this player?",
-    namespace="forge-npc:maya",
+    namespace="augengine-npc:maya",
 )
 
 trace = client.reason(
     "What should Maya say next?",
-    namespace="forge-npc:maya",
+    namespace="augengine-npc:maya",
 )
-trace_history = client.reasoning_traces(namespace="forge-npc:maya")
+trace_history = client.reasoning_traces(namespace="augengine-npc:maya")
 
-graph = client.graph("forge-npc:maya")
+graph = client.graph("augengine-npc:maya")
 usage = client.usage_report()
 ```
 

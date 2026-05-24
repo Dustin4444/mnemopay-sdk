@@ -122,15 +122,15 @@ ordering, agent isolation, persistence across reopen, readOnly contract.
 
 ---
 
-# mnemopay-sdk status - 2026-05-11 Claude (Forge consumer dogfood)
+# mnemopay-sdk status - 2026-05-11 Claude (AugEngine consumer dogfood)
 
-## First in-engine consumer of `@mnemopay/sdk/recall` — Forge persona memory
+## First in-engine consumer of `@mnemopay/sdk/recall` — AugEngine persona memory
 
-Wired `@mnemopay/sdk/recall` (`localEmbed` + `cosineSimilarity`) into `@blackpig/forge` as the persona memory backend. This is the **first real-world browser-runtime consumer** of the recall primitives — the brain repo dogfoods them in Bun/Node, but Forge is the first browser bundle.
+Wired `@mnemopay/sdk/recall` (`localEmbed` + `cosineSimilarity`) into `@blackpig/augengine` as the persona memory backend. This is the **first real-world browser-runtime consumer** of the recall primitives — the brain repo dogfoods them in Bun/Node, but AugEngine is the first browser bundle.
 
-- `packages/forge/src/ai/memory/brain.ts` — `createInProcessBrain()` is a concrete `MnemoPayClientLike`. Per-namespace cosine recall, `onPersist` hook, `snapshot()`/`initial:` rehydration, `forget()`.
-- `packages/forge/src/ai/memory/recorder.ts` — auto-pipes ObservationBus events into the memory adapter.
-- `examples/smoke-game/` — NPC Maya remembers across full page reloads via localStorage. 96/96 forge tests green (was 91; +7 brain + +5 primitive winding).
+- `packages/augengine/src/ai/memory/brain.ts` — `createInProcessBrain()` is a concrete `MnemoPayClientLike`. Per-namespace cosine recall, `onPersist` hook, `snapshot()`/`initial:` rehydration, `forget()`.
+- `packages/augengine/src/ai/memory/recorder.ts` — auto-pipes ObservationBus events into the memory adapter.
+- `examples/smoke-game/` — NPC Maya remembers across full page reloads via localStorage. 96/96 augengine tests green (was 91; +7 brain + +5 primitive winding).
 - SDK pinned at `1.6.0-alpha.2` (the version with the MCP startup-guard fix).
 
 ### New operational rule for SDK consumers in browser bundles (Vite/Rollup)

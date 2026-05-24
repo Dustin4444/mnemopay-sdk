@@ -523,15 +523,13 @@ npm install @mnemopay/sdk          # now resolves to 1.6.0
   The previous heuristic could false-fire when consumers imported
   `@mnemopay/sdk/mcp` from a process whose argv happened to contain the
   string `"mcp"` (e.g. browser bundlers, test runners under certain
-  invocations). Confirmed in the wild by the `@blackpig/forge` browser
+  invocations). Confirmed in the wild by the `@blackpig/augengine` browser
   consumer. Originally shipped in `1.6.0-alpha.2`.
 
 ### Public API additions in `src/index.ts` (since 1.5.0, additive only)
 
 - `StripeMPPRail`, `X402Rail`, `GoogleAP2Rail`, `validateMandate`
 - `attachSpatialEvidence`, `verifySpatialEvidence`, `fingerprintSpatialEvidence`
-- `BASE_MAINNET_CHAIN_ID`, `BASE_SEPOLIA_CHAIN_ID`, `ETH_MAINNET_CHAIN_ID`,
-  `USDC_CONTRACTS`, `USDC_DECIMALS`
 - type exports: `StripeMPPOptions`, `X402Options`, `X402Signer`,
   `X402AuthorizationPayload`, `TransferWithAuthorizationTypedData`,
   `AP2Mandate`, `AP2Intent`, `AP2Signer`, `AP2Options`,
@@ -574,7 +572,7 @@ from `224bec70` (2026-05-10).
   heuristic to `require.main === module` in `src/mcp/server.ts`. Prevents
   spurious server starts when consumers `import` from `@mnemopay/sdk/mcp`
   in browser bundles or test harnesses. Surfaced by the
-  `@blackpig/forge` browser consumer dogfooding `@mnemopay/sdk/recall`.
+  `@blackpig/augengine` browser consumer dogfooding `@mnemopay/sdk/recall`.
 
 ### Compatibility
 

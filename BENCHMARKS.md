@@ -129,7 +129,7 @@ The stress numbers above are from `@mnemopay/sdk@1.3.1`. The 1.4 — 1.11 series
 | `RecallEngine.query()` cosine | 1.6.0+ | top-K over 1K local memories, `localEmbed` 384-dim | ~1-2 ms |
 | Browser bundle (full root import) | 1.11.0 | webpack/vite, no aliases | 5.57 MB raw |
 | Browser bundle (`@mnemopay/sdk/recall` subpath) | 1.6.0+ | same bundler | **2.11 MB raw** (62% reduction) |
-| Browser bundle (Forge smoke-game, gzipped, recall subpath + Node-dep aliases) | 1.11.0 | production Vite build | ~57 KB / ~21 KB gzipped |
+| Browser bundle (AugEngine smoke-game, gzipped, recall subpath + Node-dep aliases) | 1.11.0 | production Vite build | ~57 KB / ~21 KB gzipped |
 | TypeScript test suite | 1.11.0 | `npm test` | 1019/1020 passing (1 unrelated stress-test perf flake) |
 | Python test suite (`mnemopay`) | 1.1.0 | `pytest tests/` | **435/435 passing** including new `PaystackRail` + `LightningRail` ports |
 
