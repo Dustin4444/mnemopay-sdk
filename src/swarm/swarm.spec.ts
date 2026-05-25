@@ -83,13 +83,17 @@ function makeProvider(opts: MockProviderOptions = {}) {
       return resp ?? { ok: true, note: `did:${key}` };
     },
     async close(session_id) {
-      closed.push(session_id);
+      if (!closed.includes(session_id)) {
+        closed.push(session_id);
+      }
     },
   };
 
   if (opts.withAbort) {
     provider.abort = async (session_id: string) => {
-      aborted.push(session_id);
+      if (!aborted.includes(session_id)) {
+        aborted.push(session_id);
+      }
     };
   }
 
@@ -264,7 +268,7 @@ describe("Swarm.recombine — built-in strategies", () => {
 
   it("accepts a custom callback strategy", async () => {
     const fn = (rs: readonly TaskResult[]): unknown => ({
-      total: rs.filter((r) => r.ok).reduce((acc, r) => acc + r.spend, 0),
+      total: Math.round(rs.filter((r) => r.ok).reduce((acc, r) => acc + r.spend, 0) * 100) / 100,
       count: rs.length,
     });
     const out = await swarm.recombine(mkResults(), fn);
