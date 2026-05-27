@@ -1,5 +1,7 @@
 # MnemoPay
 
+[![npm version](https://img.shields.io/npm/v/@mnemopay/sdk.svg)](https://www.npmjs.com/package/@mnemopay/sdk) [![PyPI version](https://img.shields.io/pypi/v/mnemopay.svg)](https://pypi.org/project/mnemopay/) [![smithery badge](https://smithery.ai/badge/@mnemopay/sdk)](https://smithery.ai/server/@mnemopay/sdk) [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
+
 **The governance layer for AI agents that handle money.** Charter-driven mission scope, FiscalGate budget enforcement, EU AI Act Article 12 audit bundles, Agent Credit Score (300-850), and a tamper-evident MerkleAudit chain — across every payment rail an agent will ever touch.
 
 MnemoPay sits **above** the rail (Stripe, Paystack, Lightning, Stripe MPP, x402, Google AP2) and **below** the agent runtime (LangChain, CrewAI, Claude Agent SDK, your own loop). The rail moves money. The runtime decides. MnemoPay declares the rules, enforces the budget, and produces the evidence.
