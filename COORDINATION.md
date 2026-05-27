@@ -19,6 +19,8 @@ Read this file at session start. Update it when you finish something the other s
 | Claude | mnemopay-site sitemap.xml — 4 of my pages + Codex's regen entries (trust, browser, blog posts) all included | mnemopay.com/sitemap.xml |
 | Claude | mnemopay-native-browser NOTICE + README + .github/{ci,release}.yml — committed Codex's local WIP | github.com/mnemopay/mnemopay-native-browser |
 | Claude | README badges (npm + PyPI + Smithery + License) added to mnemopay-sdk + gridstamp | github READMEs |
+| Claude | `@mnemopay/map3d@0.0.1` published to npm + Map3DView wired into dele-frontend (toggle 2D↔3D on RequestRidePage) | npm + dele-frontend |
+| Claude | mnemopay-native-browser `release.yml` supports BOTH Microsoft Trusted Signing (AZURE_*) and PFX-based signing — picks at runtime based on which secrets are present | github.com/mnemopay/mnemopay-native-browser |
 | Codex | Real Browserbase CDP execution in mnemopay-browser providers | repo |
 | Codex | Native browser evidence boundary hardening (a810a02, 8de6a8c, 4398ee7) | mnemopay-native-browser |
 | Codex | Apple App Store reviewer demo creds + ASC tooling for mnemopay-mobile | mnemopay-mobile |
@@ -28,8 +30,9 @@ Read this file at session start. Update it when you finish something the other s
 | Owner | What | Notes |
 |---|---|---|
 | Codex | `feat/ap2-credential-adapter` branch on mnemopay-sdk — adds AP2 verifiable-credential adapter | If Codex names the class `AP2CredentialRail` instead of `GoogleAP2Rail`, Claude needs to update mnemopay.com/vs/ap2 code snippet |
+| **Codex** | **Wire `@mnemopay/map3d@0.0.1` into AugEngine** | Per Jeremiah's 2026-05-27 directive. map3d is now on npm — Codex installs it into the AugEngine source tree, uses it to generate the cityscape base layer for the Character Proof Room and the 12-20-min vertical slice. Pure-JS exporter path (`@mnemopay/map3d/overpass` + `@mnemopay/map3d/exporter`) produces GLB; React path optional. Match the build pattern from dele-frontend's `src/components/maps/Map3DView.jsx` for the rendering shape. |
 | Codex | mnemopay-browser still has 9 non-critical audit findings deferred (1 low, 8 moderate, dev-deps mostly) | Claude's 0.1.0-alpha.1 publish unblocked the security path (qs DoS fixed); Codex can take the rest at leisure |
-| Codex | Native installer signed-release pipeline — waits on Authenticode PFX cert + secrets being set | Blocked on Jeremiah's side (cert provisioning) |
+| Codex | Native installer signed-release pipeline — Claude wired both Trusted Signing + PFX paths into release.yml; waits on Jeremiah provisioning ONE set of secrets | Either set {AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, TRUSTED_SIGNING_ACCOUNT_NAME, TRUSTED_SIGNING_CERT_PROFILE} (preferred) OR {WINDOWS_CERTIFICATE_BASE64, WINDOWS_CERTIFICATE_PASSWORD}. Workflow auto-picks. |
 | Codex | Stagehand end-to-end live test | Needs OPENAI_API_KEY at runtime — env has it; just hasn't been executed against a real session |
 
 ### Out-of-scope for either of us — Jeremiah owns
