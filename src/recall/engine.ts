@@ -347,14 +347,14 @@ export function localEmbed(text: string, dimensions = 384): Float32Array {
   return l2Normalize(vec);
 }
 
-// ─── BGE Embedding (local ONNX via @xenova/transformers) ────────────────────
+// ─── BGE Embedding (local ONNX via @huggingface/transformers) ────────────────
 
 let bgeExtractor: ((text: string, opts: any) => Promise<{ data: Float32Array }>) | null = null;
 
 async function bgeEmbed(text: string): Promise<Float32Array> {
   if (!bgeExtractor) {
     const t0 = Date.now();
-    const { pipeline, env } = await import("@xenova/transformers");
+    const { pipeline, env } = await import("@huggingface/transformers");
     const localPath = process.env.BGE_LOCAL_MODEL_PATH;
     if (localPath) {
       env.localModelPath = localPath;

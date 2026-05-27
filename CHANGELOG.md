@@ -4,6 +4,14 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [1.11.1] - 2026-05-26
+
+### Security
+
+- Replaced deprecated `@xenova/transformers` with
+  `@huggingface/transformers@^4.2.0`, removing the vulnerable
+  `onnxruntime-web -> onnx-proto -> protobufjs` runtime dependency path.
+
 ## [1.11.0] — 2026-05-21
 
 Consolidates [1.11.0-alpha.0] and [1.11.0-alpha.1] into a stable release.

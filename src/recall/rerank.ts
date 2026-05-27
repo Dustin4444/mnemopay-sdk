@@ -1,5 +1,5 @@
 /**
- * Cross-Encoder Reranker — local ONNX via @xenova/transformers.
+ * Cross-Encoder Reranker — local ONNX via @huggingface/transformers.
  *
  * After first-stage retrieval (FTS5 + vector fusion) we have top-N candidates
  * scored by lexical overlap + bi-encoder cosine. A cross-encoder scores each
@@ -34,7 +34,7 @@ export interface RerankedResult<T extends RerankCandidate = RerankCandidate> {
 }
 
 export interface RerankerConfig {
-  /** Hugging Face model id, loaded locally via @xenova/transformers. */
+  /** Hugging Face model id, loaded locally via @huggingface/transformers. */
   model?: string;
   /** Max candidate pairs to score per call (hard cap to protect latency). */
   maxCandidates?: number;
@@ -72,7 +72,7 @@ async function getPipeline(modelId: string): Promise<
   if (cachedPipeline && cachedModelId === modelId) return cachedPipeline;
 
   const t0 = Date.now();
-  const { pipeline, env } = await import("@xenova/transformers");
+  const { pipeline, env } = await import("@huggingface/transformers");
   const localPath = process.env.RERANKER_LOCAL_MODEL_PATH;
   if (localPath) {
     env.localModelPath = localPath;

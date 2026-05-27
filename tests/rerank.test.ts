@@ -35,9 +35,9 @@ describe("CrossEncoderReranker — empty input", () => {
 
 describe("CrossEncoderReranker — graceful degradation", () => {
   it("preserves input order and priorScore when pipeline load fails", async () => {
-    // Force @xenova/transformers import to throw so getPipeline() falls through
+    // Force @huggingface/transformers import to throw so getPipeline() falls through
     // to the catch branch in rerank().
-    vi.doMock("@xenova/transformers", () => {
+    vi.doMock("@huggingface/transformers", () => {
       throw new Error("transformers unavailable");
     });
 
@@ -61,11 +61,11 @@ describe("CrossEncoderReranker — graceful degradation", () => {
     expect(out[1].item.id).toBe("b");
     expect(out[2].item.id).toBe("c");
 
-    vi.doUnmock("@xenova/transformers");
+    vi.doUnmock("@huggingface/transformers");
   });
 
   it("caps candidates at maxCandidates", async () => {
-    vi.doMock("@xenova/transformers", () => {
+    vi.doMock("@huggingface/transformers", () => {
       throw new Error("unavailable");
     });
     const { CrossEncoderReranker: Fresh } = await import(
@@ -79,11 +79,11 @@ describe("CrossEncoderReranker — graceful degradation", () => {
     }));
     const out = await rr.rerank("q", candidates);
     expect(out.length).toBeLessThanOrEqual(3);
-    vi.doUnmock("@xenova/transformers");
+    vi.doUnmock("@huggingface/transformers");
   });
 
   it("respects topK when specified", async () => {
-    vi.doMock("@xenova/transformers", () => {
+    vi.doMock("@huggingface/transformers", () => {
       throw new Error("unavailable");
     });
     const { CrossEncoderReranker: Fresh } = await import(
@@ -97,6 +97,6 @@ describe("CrossEncoderReranker — graceful degradation", () => {
     ];
     const out = await rr.rerank("q", candidates, 2);
     expect(out).toHaveLength(2);
-    vi.doUnmock("@xenova/transformers");
+    vi.doUnmock("@huggingface/transformers");
   });
 });

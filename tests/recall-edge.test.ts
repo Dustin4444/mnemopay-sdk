@@ -89,6 +89,7 @@ describe("RecallEngine Edge Cases", () => {
     expect(results[0].combinedScore).toBeGreaterThan(0);
   });
 
+  // Loading the complete SDK entrypoint can exceed Vitest's 5s default on Windows.
   it("MnemoPayLite.purgeStaleVectors should sync cache with memories Map", async () => {
     const { MnemoPay } = await import("../src/index.js");
     const agent = MnemoPay.quick("purge-test", { recall: "vector" });
@@ -105,6 +106,6 @@ describe("RecallEngine Edge Cases", () => {
     const count = await agent.purgeStaleVectors();
     expect(count).toBe(1);
     expect(agent.recallEngine.stats().cachedEmbeddings).toBe(0); // Now purged
-  });
+  }, 15_000);
 });
 
