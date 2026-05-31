@@ -77,3 +77,22 @@ export type {
   ChainSinkOptions,
   VerifyBundleOptions,
 } from "./audit-chain.js";
+
+// MnemoGuard risk taxonomy — default action→tier ladder + ready-made preset.
+export {
+  RISK_ORDER,
+  riskRank,
+  classifyRisk,
+  buildRiskPolicy,
+} from "./risk.js";
+export type { RiskLevel, RiskAssessment, RiskPolicyOptions } from "./risk.js";
+
+// Typed agent action ledger — structured "what did the agent do" record.
+export { ActionLedger } from "./action-ledger.js";
+export type {
+  ActionStatus,
+  ActionApproval,
+  AgentActionRecord,
+  BeginActionInput,
+  ActionUpdate,
+} from "./action-ledger.js";

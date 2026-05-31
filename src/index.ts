@@ -2429,3 +2429,19 @@ export type {
   SpatialEvidence, SpatialEvidenceVerifyResult, SpatialEvidenceRejectReason,
   GridStampSpatialProof, GridStampSplatEvidence,
 } from "./governance/index.js";
+
+// MnemoGuard risk ladder + typed action ledger + governed skills.
+// RiskAssessment is intentionally NOT re-exported here — the FraudGuard
+// RiskAssessment (above) already owns that name at the package root; import
+// the risk-taxonomy assessment from "@mnemopay/sdk/governance/risk".
+export { RISK_ORDER, riskRank, classifyRisk, buildRiskPolicy, ActionLedger } from "./governance/index.js";
+export type {
+  RiskLevel, RiskPolicyOptions,
+  ActionStatus, ActionApproval, AgentActionRecord, BeginActionInput, ActionUpdate,
+} from "./governance/index.js";
+
+export { policyForSkill, runSkill } from "./skills/index.js";
+export type {
+  SkillPermissions, SkillTestCase, SkillActRequest, ActGrant,
+  SkillContext, MnemoSkill, RunSkillOptions, SkillRunResult,
+} from "./skills/index.js";

@@ -674,6 +674,32 @@ import { mnemoPayTools } from "@mnemopay/sdk/langgraph";
 
 ---
 
+## Module stability
+
+MnemoPay follows semver. Stability tiers tell you how much a module's public API may shift before 2.0 — see [VERSIONING.md](VERSIONING.md) for the full contract.
+
+| Module | Import | Stability | Notes |
+|---|---|---|---|
+| Memory / recall | `@mnemopay/sdk/recall` | **Stable** | remember · recall · reinforce · forget |
+| Payments | `@mnemopay/sdk` | **Stable** | charge · settle · refund · dispute, cent-precise |
+| Double-entry ledger | `@mnemopay/sdk` | **Stable** | debit+credit=0, hash-chained |
+| Identity (KYA) | `@mnemopay/sdk/identity` | **Stable** | Ed25519, capability tokens, killswitch |
+| Agent Credit Score | `@mnemopay/sdk` | **Stable** | 5-component, 300–850 |
+| Fraud / anomaly | `@mnemopay/sdk` | **Stable** | velocity, geo, EWMA, canaries |
+| Payment rails (Stripe/Paystack/Lightning) | `@mnemopay/sdk/rails` | **Stable** | one `PaymentRail` interface |
+| Governance — policy | `@mnemopay/sdk/governance/policy` | **Stable** | sub-second `evaluateAction` |
+| Governance — audit chain | `@mnemopay/sdk/governance/audit-chain` | **Stable** | Merkle event stream, Article 12 export |
+| Governance — charter / Article 12 | `@mnemopay/sdk/governance` | **Stable** | mission scope + EU AI Act bundles |
+| Governance — approval routing | `@mnemopay/sdk/governance/approval` | **Beta** | HITL queue + `routeVerdict` |
+| Governance — risk taxonomy | `@mnemopay/sdk/governance/risk` | **Beta** | Low→Critical ladder + preset policy |
+| Governance — action ledger | `@mnemopay/sdk/governance/action-ledger` | **Beta** | typed "what did the agent do" record |
+| MnemoSkills (governed skills) | `@mnemopay/sdk/skills` | **Beta** | versioned, permissioned, billable capabilities |
+| Spatial / GridStamp | `@mnemopay/sdk/governance` | **Beta** | proof-of-presence, loose-coupled, fail-closed |
+| Rails — x402 / AP2 / StripeMPP | `@mnemopay/sdk/rails` | **Alpha** | emerging agent-payment standards |
+| Swarm (voice / browser) | `@mnemopay/sdk/swarm` | **Alpha** | public API may shift; build with us |
+
+---
+
 ## Testing
 
 ```bash

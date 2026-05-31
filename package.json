@@ -1,7 +1,7 @@
 {
   "name": "@mnemopay/sdk",
   "mcpName": "com.mnemopay/sdk",
-  "version": "1.11.1",
+  "version": "1.12.0",
   "description": "Production payment infrastructure for AI agents — real Stripe/Paystack/Lightning rails, autonomous shopping with escrow, Agent Credit Score (300-850), Ed25519 identity, behavioral finance, Merkle integrity, anomaly detection, human-in-the-loop approval. Battle-tested.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -66,6 +66,18 @@
     "./governance/eu-ai-act": {
       "import": "./dist/governance/policies/eu-ai-act.js",
       "types": "./dist/governance/policies/eu-ai-act.d.ts"
+    },
+    "./governance/risk": {
+      "import": "./dist/governance/risk.js",
+      "types": "./dist/governance/risk.d.ts"
+    },
+    "./governance/action-ledger": {
+      "import": "./dist/governance/action-ledger.js",
+      "types": "./dist/governance/action-ledger.d.ts"
+    },
+    "./skills": {
+      "import": "./dist/skills/index.js",
+      "types": "./dist/skills/index.d.ts"
     },
     "./recall/anchor": {
       "import": "./dist/recall/anchor.js",
