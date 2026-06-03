@@ -1,5 +1,5 @@
 /**
- * Agent Credit Score — creditworthiness scoring for AI agents
+ * Agent Reputation Scoring — trustworthiness scoring for AI agents
  *
  * 300-850 range, deterministic given inputs. No randomness, no hidden state.
  * Five components with conventional consumer-credit-scoring weights:
@@ -14,9 +14,9 @@
  * report and does not produce FCRA-regulated data. It is not affiliated
  * with, endorsed by, or derived from Fair Isaac Corporation or the FICO mark.
  *
- * The class is exported as `AgentCreditScore`. The legacy name `AgentFICO`
- * is kept as a deprecated alias for backward compatibility and will be
- * removed in a future major version.
+ * The class is exported as `AgentReputationScoring`. The legacy names
+ * `AgentCreditScore` and `AgentFICO` are kept as deprecated aliases for
+ * backward compatibility and will be removed in a future major version.
  *
  * References:
  *   - General consumer credit-scoring methodology (public domain).
@@ -25,7 +25,7 @@
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export interface AgentCreditTransaction {
+export interface AgentReputationTransaction {
   id: string;
   amount: number;
   status: "pending" | "completed" | "refunded" | "disputed" | "expired";
@@ -36,9 +36,9 @@ export interface AgentCreditTransaction {
   riskScore?: number;
 }
 
-export interface AgentCreditInput {
+export interface AgentReputationInput {
   /** All transactions for this agent */
-  transactions: AgentCreditTransaction[];
+  transactions: AgentReputationTransaction[];
   /** Account creation timestamp */
   createdAt: Date;
   /** Total confirmed fraud flags */
@@ -57,7 +57,7 @@ export interface AgentCreditInput {
   memoriesCount?: number;
 }
 
-export interface AgentCreditComponent {
+export interface AgentReputationComponent {
   /** Raw component score 0-100 */
   score: number;
   /** Weight applied to this component */
@@ -68,8 +68,8 @@ export interface AgentCreditComponent {
   factors: string[];
 }
 
-export interface AgentCreditResult {
-  /** Final FICO score 300-850 */
+export interface AgentReputationResult {
+  /** Final reputation score 300-850 */
   score: number;
   /** Rating: exceptional | very_good | good | fair | poor */
   rating: "exceptional" | "very_good" | "good" | "fair" | "poor";
@@ -81,11 +81,11 @@ export interface AgentCreditResult {
   requiresHITL: boolean;
   /** Breakdown of all five components */
   components: {
-    paymentHistory: AgentCreditComponent;
-    creditUtilization: AgentCreditComponent;
-    historyLength: AgentCreditComponent;
-    behaviorDiversity: AgentCreditComponent;
-    fraudRecord: AgentCreditComponent;
+    paymentHistory: AgentReputationComponent;
+    creditUtilization: AgentReputationComponent;
+    historyLength: AgentReputationComponent;
+    behaviorDiversity: AgentReputationComponent;
+    fraudRecord: AgentReputationComponent;
   };
   /** Number of transactions used for scoring */
   transactionCount: number;
@@ -97,7 +97,7 @@ export interface AgentCreditResult {
   generatedAt: string;
 }
 
-export interface AgentCreditConfig {
+export interface AgentReputationConfig {
   /** Weight for payment history. Default 0.35 */
   w1: number;
   /** Weight for credit utilization. Default 0.20 */
@@ -120,7 +120,7 @@ export interface AgentCreditConfig {
   maxExpectedCategories: number;
 }
 
-export const DEFAULT_AGENT_CREDIT_CONFIG: AgentCreditConfig = {
+export const DEFAULT_AGENT_REPUTATION_CONFIG: AgentReputationConfig = {
   w1: 0.35,
   w2: 0.20,
   w3: 0.15,
@@ -137,8 +137,8 @@ export const DEFAULT_AGENT_CREDIT_CONFIG: AgentCreditConfig = {
 
 const SCORE_TIERS: Array<{
   min: number;
-  rating: AgentCreditResult["rating"];
-  trustLevel: AgentCreditResult["trustLevel"];
+  rating: AgentReputationResult["rating"];
+  trustLevel: AgentReputationResult["trustLevel"];
   feeRate: number;
   hitl: boolean;
 }> = [
@@ -150,8 +150,8 @@ const SCORE_TIERS: Array<{
 ];
 
 function interpretScore(score: number): {
-  rating: AgentCreditResult["rating"];
-  trustLevel: AgentCreditResult["trustLevel"];
+  rating: AgentReputationResult["rating"];
+  trustLevel: AgentReputationResult["trustLevel"];
   feeRate: number;
   requiresHITL: boolean;
 } {
@@ -165,31 +165,31 @@ function interpretScore(score: number): {
   return { rating: "poor", trustLevel: "minimal", feeRate: 0.025, requiresHITL: true };
 }
 
-// ─── Agent Credit Score Engine ──────────────────────────────────────────────
+// ─── Agent Reputation Scoring Engine ────────────────────────────────────────
 
-export class AgentCreditScore {
-  readonly config: AgentCreditConfig;
+export class AgentReputationScoring {
+  readonly config: AgentReputationConfig;
 
-  constructor(config?: Partial<AgentCreditConfig>) {
-    this.config = { ...DEFAULT_AGENT_CREDIT_CONFIG, ...config };
+  constructor(config?: Partial<AgentReputationConfig>) {
+    this.config = { ...DEFAULT_AGENT_REPUTATION_CONFIG, ...config };
 
     // Validate weights sum to 1.0 (within floating point tolerance)
     const weightSum = this.config.w1 + this.config.w2 + this.config.w3 + this.config.w4 + this.config.w5;
     if (Math.abs(weightSum - 1.0) > 0.001) {
-      throw new Error(`FICO weights must sum to 1.0, got ${weightSum.toFixed(4)}`);
+      throw new Error(`Reputation scoring weights must sum to 1.0, got ${weightSum.toFixed(4)}`);
     }
 
     // Validate all weights are positive
     if (this.config.w1 <= 0 || this.config.w2 <= 0 || this.config.w3 <= 0 || this.config.w4 <= 0 || this.config.w5 <= 0) {
-      throw new Error("All FICO weights must be positive");
+      throw new Error("All reputation scoring weights must be positive");
     }
   }
 
   /**
-   * Compute Agent FICO score from transaction history and agent metadata.
+   * Compute Agent Reputation Score from transaction history and agent metadata.
    * Deterministic: same inputs always produce the same score.
    */
-  compute(input: AgentCreditInput): AgentCreditResult {
+  compute(input: AgentReputationInput): AgentReputationResult {
     // Input validation — reject garbage, clamp edge cases
     this._validateInput(input);
 
@@ -250,7 +250,7 @@ export class AgentCreditScore {
 
   // ── Component 1: Payment History (35%) ──────────────────────────────────
 
-  private _computePaymentHistory(txs: AgentCreditTransaction[], now: number): Omit<AgentCreditComponent, "weight" | "weighted"> {
+  private _computePaymentHistory(txs: AgentReputationTransaction[], now: number): Omit<AgentReputationComponent, "weight" | "weighted"> {
     const factors: string[] = [];
 
     if (txs.length === 0) {
@@ -324,7 +324,7 @@ export class AgentCreditScore {
 
   // ── Component 2: Credit Utilization (20%) ───────────────────────────────
 
-  private _computeCreditUtilization(txs: AgentCreditTransaction[], budgetCap: number, periodDays: number, now: number): Omit<AgentCreditComponent, "weight" | "weighted"> {
+  private _computeCreditUtilization(txs: AgentReputationTransaction[], budgetCap: number, periodDays: number, now: number): Omit<AgentReputationComponent, "weight" | "weighted"> {
     const factors: string[] = [];
 
     if (txs.length === 0) {
@@ -371,7 +371,7 @@ export class AgentCreditScore {
 
   // ── Component 3: History Length (15%) ────────────────────────────────────
 
-  private _computeHistoryLength(createdAt: Date, txs: AgentCreditTransaction[], now: number): Omit<AgentCreditComponent, "weight" | "weighted"> {
+  private _computeHistoryLength(createdAt: Date, txs: AgentReputationTransaction[], now: number): Omit<AgentReputationComponent, "weight" | "weighted"> {
     const factors: string[] = [];
 
     const ageDays = (now - createdAt.getTime()) / 86_400_000;
@@ -407,7 +407,7 @@ export class AgentCreditScore {
 
   // ── Component 4: Behavior Diversity (15%) ───────────────────────────────
 
-  private _computeBehaviorDiversity(txs: AgentCreditTransaction[], memoriesCount: number): Omit<AgentCreditComponent, "weight" | "weighted"> {
+  private _computeBehaviorDiversity(txs: AgentReputationTransaction[], memoriesCount: number): Omit<AgentReputationComponent, "weight" | "weighted"> {
     const factors: string[] = [];
 
     if (txs.length === 0) {
@@ -460,7 +460,7 @@ export class AgentCreditScore {
 
   // ── Component 5: Fraud Record (15%) ─────────────────────────────────────
 
-  private _computeFraudRecord(fraudFlags: number, disputeCount: number, disputesLost: number, warnings: number): Omit<AgentCreditComponent, "weight" | "weighted"> {
+  private _computeFraudRecord(fraudFlags: number, disputeCount: number, disputesLost: number, warnings: number): Omit<AgentReputationComponent, "weight" | "weighted"> {
     const factors: string[] = [];
 
     // Start at 100, deduct for each negative event
@@ -547,20 +547,20 @@ export class AgentCreditScore {
   }
 
   /**
-   * Serialize FICO result for storage/transmission.
+   * Serialize reputation result for storage/transmission.
    * Strips non-essential data to reduce payload.
    */
-  static serialize(result: AgentCreditResult): string {
+  static serialize(result: AgentReputationResult): string {
     return JSON.stringify(result);
   }
 
   /**
    * Deserialize with validation — never trust stored scores.
    */
-  static deserialize(json: string): AgentCreditResult {
+  static deserialize(json: string): AgentReputationResult {
     const data = JSON.parse(json);
     if (typeof data.score !== "number" || data.score < 300 || data.score > 850) {
-      throw new Error("Invalid FICO score: must be 300-850");
+      throw new Error("Invalid reputation score: must be 300-850");
     }
     // Re-clamp all component scores on load (defense in depth)
     if (data.components && typeof data.components === "object") {
@@ -600,19 +600,33 @@ function extractCategory(reason: string): string {
 
 // ─── Backward-compatibility aliases ─────────────────────────────────────────
 // These legacy names are kept for existing users. They will be removed in
-// a future major version. New code should use the `AgentCredit*` names.
+// a future major version. New code should use the `AgentReputation*` names.
 
-/** @deprecated Use `AgentCreditScore` instead. */
-export const AgentFICO = AgentCreditScore;
-/** @deprecated Use `AgentCreditTransaction` instead. */
-export type FICOTransaction = AgentCreditTransaction;
-/** @deprecated Use `AgentCreditInput` instead. */
-export type FICOInput = AgentCreditInput;
-/** @deprecated Use `AgentCreditComponent` instead. */
-export type FICOComponent = AgentCreditComponent;
-/** @deprecated Use `AgentCreditResult` instead. */
-export type FICOResult = AgentCreditResult;
-/** @deprecated Use `AgentCreditConfig` instead. */
-export type FICOConfig = AgentCreditConfig;
-/** @deprecated Use `DEFAULT_AGENT_CREDIT_CONFIG` instead. */
-export const DEFAULT_FICO_CONFIG = DEFAULT_AGENT_CREDIT_CONFIG;
+/** @deprecated Use `AgentReputationScoring` instead. */
+export const AgentCreditScore = AgentReputationScoring;
+/** @deprecated Use `AgentReputationScoring` instead. */
+export const AgentFICO = AgentReputationScoring;
+/** @deprecated Use `AgentReputationTransaction` instead. */
+export type AgentCreditTransaction = AgentReputationTransaction;
+/** @deprecated Use `AgentReputationInput` instead. */
+export type AgentCreditInput = AgentReputationInput;
+/** @deprecated Use `AgentReputationComponent` instead. */
+export type AgentCreditComponent = AgentReputationComponent;
+/** @deprecated Use `AgentReputationResult` instead. */
+export type AgentCreditResult = AgentReputationResult;
+/** @deprecated Use `AgentReputationConfig` instead. */
+export type AgentCreditConfig = AgentReputationConfig;
+/** @deprecated Use `DEFAULT_AGENT_REPUTATION_CONFIG` instead. */
+export const DEFAULT_AGENT_CREDIT_CONFIG = DEFAULT_AGENT_REPUTATION_CONFIG;
+/** @deprecated Use `DEFAULT_AGENT_REPUTATION_CONFIG` instead. */
+export const DEFAULT_FICO_CONFIG = DEFAULT_AGENT_REPUTATION_CONFIG;
+/** @deprecated Use `AgentReputationTransaction` instead. */
+export type FICOTransaction = AgentReputationTransaction;
+/** @deprecated Use `AgentReputationInput` instead. */
+export type FICOInput = AgentReputationInput;
+/** @deprecated Use `AgentReputationComponent` instead. */
+export type FICOComponent = AgentReputationComponent;
+/** @deprecated Use `AgentReputationResult` instead. */
+export type FICOResult = AgentReputationResult;
+/** @deprecated Use `AgentReputationConfig` instead. */
+export type FICOConfig = AgentReputationConfig;

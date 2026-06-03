@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@mnemopay/sdk.svg)](https://www.npmjs.com/package/@mnemopay/sdk) [![PyPI version](https://img.shields.io/pypi/v/mnemopay.svg)](https://pypi.org/project/mnemopay/) [![smithery badge](https://smithery.ai/badge/@mnemopay/sdk)](https://smithery.ai/server/@mnemopay/sdk) [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
 
-**The governance layer for AI agents that handle money.** Charter-driven mission scope, FiscalGate budget enforcement, EU AI Act Article 12 audit bundles, Agent Credit Score (300-850), and a tamper-evident MerkleAudit chain — across every payment rail an agent will ever touch.
+**The governance layer for AI agents that handle money.** Charter-driven mission scope, FiscalGate budget enforcement, EU AI Act Article 12 audit bundles, Agent Reputation Scoring (300-850), and a tamper-evident MerkleAudit chain — across every payment rail an agent will ever touch.
 
 MnemoPay sits **above** the rail (Stripe, Paystack, Lightning, Stripe MPP, x402, Google AP2) and **below** the agent runtime (LangChain, CrewAI, Claude Agent SDK, your own loop). The rail moves money. The runtime decides. MnemoPay declares the rules, enforces the budget, and produces the evidence.
 
@@ -21,7 +21,7 @@ npm install @mnemopay/sdk
 ```ts
 import MnemoPay, {
   Charter, FiscalGate, MerkleAudit,        // governance primitives
-  AgentCreditScore, BehavioralEngine,       // trust + reputation
+  AgentReputationScoring, BehavioralEngine, // trust + reputation
   StripeRail, X402Rail, GoogleAP2Rail,      // rails
 } from "@mnemopay/sdk";
 
@@ -31,10 +31,10 @@ await agent.remember("User prefers monthly billing");
 const tx = await agent.charge(25, "Monthly API access");   // FiscalGate hold
 await agent.settle(tx.id);                                  // FiscalGate capture
 
-// Agent credit score — portable, 300-850 range. NOT FICO-brand, NOT a consumer
+// Agent Reputation Score — portable, 300-850 range. NOT FICO-brand, NOT a consumer
 // credit report, NOT governed by FCRA. Scores agents (software), not humans.
-const score = new AgentCreditScore();
-const result = score.compute({ transactions: [tx], createdAt: new Date(), /* ... */ });
+const scorer = new AgentReputationScoring();
+const result = scorer.compute({ transactions: [tx], createdAt: new Date(), /* ... */ });
 // → { score: 672, rating: "good", feeRate: 0.015, trustLevel: "standard" }
 ```
 
@@ -175,7 +175,7 @@ If you're shipping an MCP server and want to charge per-call — even sub-cent a
 
 - **Sub-cent payments** via Lightning rail (impossible on Stripe/Paystack due to fees)
 - **Per-tool metering** with `agent.charge(amount, toolName)` — two lines of code
-- **Agent Credit Score** gates abusive callers automatically — 300-850 credit score, free tier + paid tier
+- **Agent Reputation Scoring** gates abusive callers automatically — 300-850 reputation score, free tier + paid tier
 - **Cryptographic receipts** every user can audit — no "trust me bro" billing
 - **Free indefinitely** for the first 10 MCP servers that adopt it, subject to 90 days' written notice of any future change ([email](mailto:omiagbogold@icloud.com) with your repo)
 
@@ -190,7 +190,7 @@ await agent.settle(tx.id);
 // ... run the tool
 ```
 
-Zero-config starter → production Lightning rail → Agent Credit Score gating. Same API.
+Zero-config starter → production Lightning rail → Agent Reputation Scoring gating. Same API.
 
 ---
 
@@ -203,7 +203,7 @@ $87M has been invested across 5 competitors. None have more than 3 of these 10 f
 | Persistent Memory | **Yes** | Yes | No | No | No |
 | Payment Rails (3) | **Yes** | No | USDC only | Stablecoin | Bank only |
 | Agent Identity (KYA) | **Yes** | No | Building | Passport | No |
-| **Agent Credit Score (300-850)** | **Yes** | No | No | No | No |
+| **Agent Reputation Scoring (300-850)** | **Yes** | No | No | No | No |
 | **Behavioral Finance** | **Yes** | No | No | No | No |
 | **Memory Integrity (Merkle)** | **Yes** | No | No | No | No |
 | **EWMA Anomaly Detection** | **Yes** | No | No | No | No |
@@ -214,15 +214,15 @@ $87M has been invested across 5 competitors. None have more than 3 of these 10 f
 
 ---
 
-## Agent Credit Score — Credit Score for AI Agents
+## Agent Reputation Scoring
 
-A novel cross-session credit scoring system for AI agents. Five-component scoring on a 300-850 range (familiar to developers from consumer credit; MnemoPay is not affiliated with Fair Isaac Corporation or any consumer credit bureau):
+A novel cross-session reputation scoring system for AI agents. Five-component scoring on a 300-850 range (familiar to developers from consumer credit; MnemoPay is not affiliated with Fair Isaac Corporation or any consumer credit bureau):
 
 ```ts
-import { AgentCreditScore } from "@mnemopay/sdk";
+import { AgentReputationScoring } from "@mnemopay/sdk";
 
-const fico = new AgentCreditScore();
-const result = fico.compute({
+const scorer = new AgentReputationScoring();
+const result = scorer.compute({
   transactions: await agent.history(1000),
   createdAt: agentCreationDate,
   fraudFlags: 0,
@@ -233,9 +233,9 @@ const result = fico.compute({
   memoriesCount: agent.memories.size,
 });
 
-console.log(result.score);     // 742
-console.log(result.rating);    // "very_good"
-console.log(result.feeRate);   // 0.013 (1.3%)
+console.log(result.score);      // 742
+console.log(result.rating);     // "very_good"
+console.log(result.feeRate);    // 0.013 (1.3%)
 console.log(result.trustLevel); // "high"
 console.log(result.requiresHITL); // false
 ```
@@ -611,11 +611,11 @@ Need more? Opt in explicitly:
 ```bash
 npx @mnemopay/sdk --tools=all       # all 40 tools
 npx @mnemopay/sdk --tools=agent     # essentials + commerce + hitl + payments + webhooks
-npx @mnemopay/sdk --tools=fico      # Agent Credit Score only
+npx @mnemopay/sdk --tools=reputation  # Agent Reputation Scoring only
 ```
 
 Groups: `memory`, `wallet`, `tx`, `commerce`, `hitl`, `payments`, `webhooks`,
-`fico`, `security`. Aliases: `essentials` (default), `agent`, `all`. Also
+`reputation`, `security`. Aliases: `essentials` (default), `agent`, `all`. Also
 settable via `MNEMOPAY_TOOLS` env var.
 
 > **Breaking change in v1.3.0:** default was `all`, now `essentials`. If you
@@ -649,8 +649,8 @@ import { mnemoPayTools } from "@mnemopay/sdk/langgraph";
 │ GOVERNANCE  Charter · FiscalGate · Article 12 · MerkleAudit      │
 │             mission scope, budget enforcement, audit bundles     │
 ├──────────┬──────────┬───────────┬─────────────────────────────────┤
-│  Memory  │ Payments │ Identity  │  Agent Credit Score (300-850)   │
-│          │          │           │  5-component scoring            │
+│  Memory  │ Payments │ Identity  │  Agent Reputation Scoring       │
+│          │          │           │  300-850, 5-component           │
 │ remember │ charge   │ KYA       ├─────────────────────────────────┤
 │ recall   │ settle   │ tokens    │  Behavioral Finance             │
 │ reinforce│ refund   │ perms     │  prospect theory, nudges        │
@@ -684,7 +684,7 @@ MnemoPay follows semver. Stability tiers tell you how much a module's public API
 | Payments | `@mnemopay/sdk` | **Stable** | charge · settle · refund · dispute, cent-precise |
 | Double-entry ledger | `@mnemopay/sdk` | **Stable** | debit+credit=0, hash-chained |
 | Identity (KYA) | `@mnemopay/sdk/identity` | **Stable** | Ed25519, capability tokens, killswitch |
-| Agent Credit Score | `@mnemopay/sdk` | **Stable** | 5-component, 300–850 |
+| Agent Reputation Scoring | `@mnemopay/sdk` | **Stable** | 5-component, 300–850 |
 | Fraud / anomaly | `@mnemopay/sdk` | **Stable** | velocity, geo, EWMA, canaries |
 | Payment rails (Stripe/Paystack/Lightning) | `@mnemopay/sdk/rails` | **Stable** | one `PaymentRail` interface |
 | Governance — policy | `@mnemopay/sdk/governance/policy` | **Stable** | sub-second `evaluateAction` |
@@ -706,7 +706,7 @@ MnemoPay follows semver. Stability tiers tell you how much a module's public API
 npm test    # full test suite across 12 files
 ```
 
-- `core.test.ts` — memory, payments, lifecycle, FICO, behavioral, Merkle, EWMA, canaries, streaks, badges
+- `core.test.ts` — memory, payments, lifecycle, reputation scoring, behavioral, Merkle, EWMA, canaries, streaks, badges
 - `fraud.test.ts` — velocity, anomaly, fees, disputes, replay detection
 - `geo-fraud.test.ts` — geo signals, trust, sanctions
 - `identity.test.ts` — KYA, tokens, permissions
@@ -736,11 +736,11 @@ The entity-observation write-path in `src/recall/observations.ts` (per-entity co
 
 ## Trademark and regulatory notices
 
-**Agent Credit Score** is a creditworthiness scoring system **for autonomous software agents**, not for consumer credit reporting. It does not produce a consumer report as defined by the Fair Credit Reporting Act (FCRA) and is not regulated under the FCRA. MnemoPay is not a consumer reporting agency.
+**Agent Reputation Scoring** is a trustworthiness scoring system **for autonomous software agents**, not for consumer credit reporting. It does not produce a consumer report as defined by the Fair Credit Reporting Act (FCRA) and is not regulated under the FCRA. MnemoPay is not a consumer reporting agency.
 
 MnemoPay is not a bank, money transmitter, or insurer, and does not hold customer deposits. Payments are settled through third-party payment rails (Stripe, Paystack, Lightning Network) — MnemoPay is software that connects to those rails on behalf of developers, not a financial institution.
 
-"FICO" is a registered trademark of Fair Isaac Corporation. MnemoPay and its Agent Credit Score module are not affiliated with, endorsed by, or derived from Fair Isaac Corporation. The `AgentFICO` export name is a deprecated alias kept for backward compatibility with earlier beta releases and will be removed in a future major version.
+"FICO" is a registered trademark of Fair Isaac Corporation. MnemoPay and its Agent Reputation Scoring module are not affiliated with, endorsed by, or derived from Fair Isaac Corporation. The `AgentCreditScore` and `AgentFICO` export names are deprecated aliases kept for backward compatibility with earlier beta releases and will be removed in a future major version.
 
 ---
 
