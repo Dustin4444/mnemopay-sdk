@@ -12,7 +12,7 @@ npm install @mnemopay/sdk
 
 > **New here?** Start at [`docs/QUICKSTART.md`](./docs/QUICKSTART.md) — 60 seconds, three steps, working code.
 >
-> **Docs:** [Quickstart](./docs/QUICKSTART.md) · [Integrations (OpenAI/Anthropic/LangGraph/AutoGen)](./docs/INTEGRATIONS.md) · [Recall](./docs/RECALL.md) · [FiscalGate](./docs/FISCALGATE.md) · [Audit bundles (EU AI Act Art. 12)](./docs/AUDIT-BUNDLES.md) · [Subpath import rule](./docs/SUBPATH-IMPORT-RULE.md) · [Claude Agent SDK guide](./docs/agent-sdk-guide.md)
+> **Docs:** [Quickstart](./docs/QUICKSTART.md) · [Architecture](./docs/architecture.md) · [Permissions](./docs/permissions.md) · [Action ledger](./docs/action-ledger.md) · [Integrations (OpenAI/Anthropic/LangGraph/AutoGen)](./docs/INTEGRATIONS.md) · [Recall](./docs/RECALL.md) · [FiscalGate](./docs/FISCALGATE.md) · [Audit bundles (EU AI Act Art. 12)](./docs/AUDIT-BUNDLES.md) · [Subpath import rule](./docs/SUBPATH-IMPORT-RULE.md) · [Claude Agent SDK guide](./docs/agent-sdk-guide.md)
 >
 > **Community:** [LICENSE (Apache 2.0)](./LICENSE) · [CHANGELOG](./CHANGELOG.md) · [CONTRIBUTING](./CONTRIBUTING.md) · [CODE_OF_CONDUCT](./CODE_OF_CONDUCT.md) · [SECURITY](./SECURITY.md) · [Discussions](https://github.com/mnemopay/mnemopay-sdk/discussions) · [Good first issues](https://github.com/mnemopay/mnemopay-sdk/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)
 >
@@ -641,6 +641,8 @@ import { mnemoPayTools } from "@mnemopay/sdk/langgraph";
 
 ## Architecture
 
+Full stack diagram and module map: [`docs/architecture.md`](./docs/architecture.md).
+
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                       MnemoPay SDK                                │
@@ -693,7 +695,7 @@ MnemoPay follows semver. Stability tiers tell you how much a module's public API
 | Governance — approval routing | `@mnemopay/sdk/governance/approval` | **Beta** | HITL queue + `routeVerdict` |
 | Governance — risk taxonomy | `@mnemopay/sdk/governance/risk` | **Beta** | Low→Critical ladder + preset policy |
 | Governance — action ledger | `@mnemopay/sdk/governance/action-ledger` | **Beta** | typed "what did the agent do" record |
-| MnemoSkills (governed skills) | `@mnemopay/sdk/skills` | **Beta** | versioned, permissioned, billable capabilities |
+| MnemoSkills (governed skills) | `@mnemopay/sdk/skills` | **Beta** | versioned, permissioned, billable capabilities — see [examples/08-invoice-collector.ts](./examples/08-invoice-collector.ts) |
 | Spatial / GridStamp | `@mnemopay/sdk/governance` | **Beta** | proof-of-presence, loose-coupled, fail-closed |
 | Rails — x402 / AP2 / StripeMPP | `@mnemopay/sdk/rails` | **Alpha** | emerging agent-payment standards |
 | Swarm (voice / browser) | `@mnemopay/sdk/swarm` | **Alpha** | public API may shift; build with us |

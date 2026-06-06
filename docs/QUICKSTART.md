@@ -72,6 +72,10 @@ The hosted gateway is the same surface you've been calling locally — it just a
 ## Where to go next
 
 - [`INTEGRATIONS.md`](./INTEGRATIONS.md) — drop into OpenAI / Anthropic / LangGraph / AutoGen with one import.
+- [`architecture.md`](./architecture.md) — stack placement and module map.
+- [`permissions.md`](./permissions.md) — MnemoGuard policy + approval gates.
+- [`action-ledger.md`](./action-ledger.md) — provable agent action records.
+- [`../examples/08-invoice-collector.ts`](../examples/08-invoice-collector.ts) — governed skill demo.
 - [`RECALL.md`](./RECALL.md) — semantic memory primitive, reinforcement, and the 1-hour Claude cache helper.
 - [`FISCALGATE.md`](./FISCALGATE.md) — charter-driven budget enforcement.
 - [`AUDIT-BUNDLES.md`](./AUDIT-BUNDLES.md) — EU AI Act Article 12 signed evidence bundles.
