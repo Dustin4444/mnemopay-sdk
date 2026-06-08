@@ -36,12 +36,16 @@ startCommand:
         type: boolean
         default: false
         description: Enable debug logging.
+      tools:
+        type: string
+        default: "essentials"
+        description: "Comma-separated MCP tool groups. Keep essentials as the default; explicitly opt into privileged groups."
   commandFunction:
     # A function that produces the CLI command to start the MCP on stdio.
     |-
     (config) => ({
       command: 'npx',
-      args: ['-y', '@mnemopay/sdk'],
+      args: ['-y', '@mnemopay/sdk@latest'],
       env: {
         MNEMOPAY_AGENT_ID: config.agentId || 'mcp-agent',
         ...(config.persistDir ? { MNEMOPAY_PERSIST_DIR: config.persistDir } : {}),
@@ -49,6 +53,7 @@ startCommand:
         ...(config.recall ? { MNEMOPAY_RECALL: config.recall } : {}),
         ...(config.stripeSecretKey ? { STRIPE_SECRET_KEY: config.stripeSecretKey } : {}),
         ...(config.paystackSecretKey ? { PAYSTACK_SECRET_KEY: config.paystackSecretKey } : {}),
-        ...(config.debug ? { DEBUG: 'true' } : {})
+        ...(config.debug ? { DEBUG: 'true' } : {}),
+        MNEMOPAY_TOOLS: config.tools || 'essentials'
       }
     })
