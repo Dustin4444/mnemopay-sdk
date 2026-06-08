@@ -8,7 +8,7 @@
  *
  * Usage:
  *   npx @mnemopay/mcp-server                         # stdio, essentials (default)
- *   npx @mnemopay/mcp-server --tools=all             # all 63 tools
+ *   npx @mnemopay/mcp-server --tools=all             # all 70 tools
  *   npx @mnemopay/mcp-server --tools=memory,wallet   # memory + wallet only
  *   npx @mnemopay/mcp-server --http --port 3200      # HTTP/SSE mode
  *
@@ -27,8 +27,9 @@
  *   identity    KYA identity + scoped capability tokens + kill switch
  *   skills      governed declarative skill policy preview/execution plan
  *   spatial     GridStamp evidence validation/attachment/audit export
+ *   agent_os    durable browser/code/computer/skill/brain jobs + operations
  *   agent       essentials + commerce + hitl + payments + webhooks
- *   all         every tool (63)
+ *   all         every tool (70)
  *
  * Environment:
  *   MNEMOPAY_TOOLS      — Comma-separated group list (alternative to --tools)
@@ -252,11 +253,15 @@ const TOOL_GROUPS: Record<string, string[]> = {
   ],
   skills: ["skill_policy_preview", "skill_run_plan"],
   spatial: ["spatial_evidence_verify", "spatial_evidence_attach", "spatial_audit_export"],
+  agent_os: [
+    "agent_os_job_create", "agent_os_jobs", "agent_os_job_retry", "agent_os_job_cancel",
+    "agent_os_alerts", "agent_os_usage", "agent_os_audit_export",
+  ],
 };
 
 const GROUP_ALIASES: Record<string, string[]> = {
   essentials: ["memory", "wallet", "tx"],
-  agent: ["memory", "wallet", "tx", "commerce", "hitl", "payments", "webhooks", "governance", "identity", "skills", "spatial"],
+  agent: ["memory", "wallet", "tx", "commerce", "hitl", "payments", "webhooks", "governance", "identity", "skills", "spatial", "agent_os"],
   all: Object.keys(TOOL_GROUPS),
 };
 
@@ -1231,6 +1236,59 @@ const TOOLS = [
     description: "Export and verify the current spatial evidence audit chain.",
     inputSchema: { type: "object" as const, properties: {} },
   },
+  // Durable Agent OS jobs and operator controls
+  {
+    name: "agent_os_job_create",
+    description: "Submit an isolated browser, code, computer, skill, or brain job to the configured MnemoPay Agent OS gateway.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        type: { type: "string", enum: ["brain.recall", "brain.remember", "browser.run", "code.run", "computer.run", "skill.run"] },
+        agentId: { type: "string" },
+        payload: { type: "object" },
+        maxAttempts: { type: "integer", minimum: 1, maximum: 20 },
+      },
+      required: ["type", "agentId", "payload"],
+    },
+  },
+  {
+    name: "agent_os_jobs",
+    description: "List durable Agent OS jobs for the configured organization.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
+    name: "agent_os_job_retry",
+    description: "Retry a failed or cancelled Agent OS job.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { jobId: { type: "string" } },
+      required: ["jobId"],
+    },
+  },
+  {
+    name: "agent_os_job_cancel",
+    description: "Cancel a queued or running Agent OS job.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { jobId: { type: "string" } },
+      required: ["jobId"],
+    },
+  },
+  {
+    name: "agent_os_alerts",
+    description: "List Agent OS operational alerts for the configured organization.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
+    name: "agent_os_usage",
+    description: "Read organization-scoped Agent OS usage and limits.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
+    name: "agent_os_audit_export",
+    description: "Export the organization-scoped Agent OS audit log.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
 ];
 
 // ─── Tool execution ─────────────────────────────────────────────────────────
@@ -1988,6 +2046,44 @@ export async function executeTool(agent: Agent, name: string, args: Record<strin
       }, null, 2);
     }
 
+    case "agent_os_job_create": {
+      const response = await agentOsRequest("POST", "/jobs", {
+        type: args.type,
+        agent_id: args.agentId,
+        payload: args.payload,
+        max_attempts: args.maxAttempts ?? 3,
+      });
+      _governanceLedger.auditChain().emit("agent_os.job.created", {
+        type: args.type,
+        agent_id: args.agentId,
+      });
+      return JSON.stringify(response, null, 2);
+    }
+
+    case "agent_os_jobs":
+      return JSON.stringify(await agentOsRequest("GET", "/jobs"), null, 2);
+
+    case "agent_os_job_retry": {
+      const response = await agentOsRequest("POST", `/jobs/${encodeURIComponent(args.jobId)}/retry`);
+      _governanceLedger.auditChain().emit("agent_os.job.retried", { job_id: args.jobId });
+      return JSON.stringify(response, null, 2);
+    }
+
+    case "agent_os_job_cancel": {
+      const response = await agentOsRequest("POST", `/jobs/${encodeURIComponent(args.jobId)}/cancel`);
+      _governanceLedger.auditChain().emit("agent_os.job.cancelled", { job_id: args.jobId });
+      return JSON.stringify(response, null, 2);
+    }
+
+    case "agent_os_alerts":
+      return JSON.stringify(await agentOsRequest("GET", "/alerts"), null, 2);
+
+    case "agent_os_usage":
+      return JSON.stringify(await agentOsRequest("GET", "/usage"), null, 2);
+
+    case "agent_os_audit_export":
+      return JSON.stringify(await agentOsRequest("GET", "/audit-export"), null, 2);
+
     // ── Payouts (Paystack) ──────────────────────────────────────────────
 
     case "payout_create": {
@@ -2144,6 +2240,46 @@ const _governanceRateCounter = new InMemoryRateCounter();
 let _activePolicy: CompiledPolicy = compilePolicy(buildRiskPolicy());
 const _identityRegistry = new IdentityRegistry();
 const _spatialAudit = new MerkleAudit();
+
+async function agentOsRequest(
+  method: "GET" | "POST",
+  suffix: string,
+  body?: Record<string, unknown>,
+): Promise<unknown> {
+  const baseUrl = process.env.MNEMOPAY_GATEWAY_URL?.trim().replace(/\/+$/, "");
+  const orgId = process.env.MNEMOPAY_ORG_ID?.trim();
+  const orgKey = process.env.MNEMOPAY_ORG_API_KEY?.trim();
+  const identity = process.env.MNEMOPAY_IDENTITY?.trim() || process.env.MNEMOPAY_AGENT_ID?.trim();
+  if (!baseUrl?.startsWith("https://") || !orgId || !orgKey || !identity) {
+    throw new Error(
+      "Agent OS gateway is not configured. Set an HTTPS MNEMOPAY_GATEWAY_URL, MNEMOPAY_ORG_ID, MNEMOPAY_ORG_API_KEY, and MNEMOPAY_IDENTITY.",
+    );
+  }
+
+  const response = await fetch(
+    `${baseUrl}/api/v1/platform/organizations/${encodeURIComponent(orgId)}${suffix}`,
+    {
+      method,
+      headers: {
+        authorization: `Bearer ${orgKey}`,
+        "x-mnemopay-identity": identity,
+        "content-type": "application/json",
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    },
+  );
+  const text = await response.text();
+  let parsed: unknown = {};
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    parsed = { text };
+  }
+  if (!response.ok) {
+    throw new Error(`Agent OS gateway returned ${response.status}: ${text.slice(0, 500)}`);
+  }
+  return parsed;
+}
 
 function policyActionFromArgs(args: Record<string, any>): PolicyAction {
   return {
