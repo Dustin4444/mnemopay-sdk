@@ -8,7 +8,7 @@
  *
  * Usage:
  *   npx @mnemopay/mcp-server                         # stdio, essentials (default)
- *   npx @mnemopay/mcp-server --tools=all             # all 40 tools
+ *   npx @mnemopay/mcp-server --tools=all             # all 51 tools
  *   npx @mnemopay/mcp-server --tools=memory,wallet   # memory + wallet only
  *   npx @mnemopay/mcp-server --http --port 3200      # HTTP/SSE mode
  *
@@ -23,8 +23,9 @@
  *   webhooks    webhook_register/list
  *   fico        agent_fico_score/behavioral/anomaly/fraud/reputation
  *   security    memory_integrity_check/history_export
+ *   governance  charter/policy/risk/action-ledger/audit-bundle tools
  *   agent       essentials + commerce + hitl + payments + webhooks
- *   all         every tool (40)
+ *   all         every tool (51)
  *
  * Environment:
  *   MNEMOPAY_TOOLS      — Comma-separated group list (alternative to --tools)
@@ -55,6 +56,18 @@ import { PersistentApprovalQueue } from "../storage/approval-queue.js";
 import { WebhookStore } from "../storage/webhooks.js";
 import { SQLiteAdapter } from "../recall/persistence/sqlite.js";
 import { localEmbed } from "../recall/engine.js";
+import {
+  ActionLedger,
+  buildRiskPolicy,
+  classifyRisk,
+  compilePolicy,
+  evaluateAction,
+  InMemoryRateCounter,
+  lintPolicy,
+  validateCharter,
+  verifyBundle,
+} from "../governance/index.js";
+import type { ChainBundle, CompiledPolicy, Policy, PolicyAction } from "../governance/index.js";
 import * as fs from "fs";
 
 // ─── Security: MCP-level rate limiter ────────────────────────────────────────
@@ -216,11 +229,17 @@ const TOOL_GROUPS: Record<string, string[]> = {
     "anomaly_check", "fraud_stats", "reputation",
   ],
   security: ["memory_integrity_check", "history_export"],
+  governance: [
+    "charter_validate",
+    "policy_lint", "policy_set", "policy_evaluate", "risk_classify",
+    "action_begin", "action_update", "action_end", "action_list",
+    "audit_bundle_export", "audit_bundle_verify",
+  ],
 };
 
 const GROUP_ALIASES: Record<string, string[]> = {
   essentials: ["memory", "wallet", "tx"],
-  agent: ["memory", "wallet", "tx", "commerce", "hitl", "payments", "webhooks"],
+  agent: ["memory", "wallet", "tx", "commerce", "hitl", "payments", "webhooks", "governance"],
   all: Object.keys(TOOL_GROUPS),
 };
 
@@ -919,6 +938,142 @@ const TOOLS = [
       required: ["amount"],
     },
   },
+  // Governance and action-evidence tools
+  {
+    name: "charter_validate",
+    description: "Validate an agent mission charter before execution.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        charter: { type: "object", description: "Charter object containing goal, budget, agents, and outputs" },
+      },
+      required: ["charter"],
+    },
+  },
+  {
+    name: "policy_lint",
+    description: "Lint a governance policy for invalid, contradictory, or ineffective rules.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { policy: { type: "object", description: "MnemoPay governance policy" } },
+      required: ["policy"],
+    },
+  },
+  {
+    name: "policy_set",
+    description: "Set the active MCP governance policy. Uses MnemoGuard defaults when policy is omitted.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        policy: { type: "object", description: "Custom MnemoPay policy" },
+        approvalThresholdUsd: { type: "number", minimum: 0, description: "Default-policy approval threshold" },
+        hardCapUsd: { type: "number", minimum: 0, description: "Default-policy hard cap" },
+        blockTargets: { type: "array", items: { type: "string" }, description: "Targets blocked by the default policy" },
+      },
+    },
+  },
+  {
+    name: "policy_evaluate",
+    description: "Evaluate a proposed tool, model, HTTP, file, or payment action against the active policy.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        kind: { type: "string", enum: ["tool_call", "llm_call", "http_request", "file_write", "payment"] },
+        target: { type: "string" },
+        estimatedUsd: { type: "number", minimum: 0 },
+        argsText: { type: "string" },
+        locale: { type: "string" },
+      },
+      required: ["kind", "target"],
+    },
+  },
+  {
+    name: "risk_classify",
+    description: "Classify a proposed action as low, medium, high, or critical risk.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        kind: { type: "string", enum: ["tool_call", "llm_call", "http_request", "file_write", "payment"] },
+        target: { type: "string" },
+        estimatedUsd: { type: "number", minimum: 0 },
+        argsText: { type: "string" },
+        locale: { type: "string" },
+      },
+      required: ["kind", "target"],
+    },
+  },
+  {
+    name: "action_begin",
+    description: "Begin a typed action-ledger record before an agent acts.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agentId: { type: "string" },
+        intent: { type: "string" },
+        plan: { type: "string" },
+        risk: { type: "string", enum: ["low", "medium", "high", "critical"] },
+      },
+      required: ["intent"],
+    },
+  },
+  {
+    name: "action_update",
+    description: "Append tools, memories, files, sites, cost, plan, or rollback notes to an action.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        actionId: { type: "string" },
+        toolsUsed: { type: "array", items: { type: "string" } },
+        memoriesUsed: { type: "array", items: { type: "string" } },
+        filesAccessed: { type: "array", items: { type: "string" } },
+        sitesVisited: { type: "array", items: { type: "string" } },
+        costUsd: { type: "number", minimum: 0 },
+        plan: { type: "string" },
+        rollback: { type: "string" },
+        executing: { type: "boolean" },
+      },
+      required: ["actionId"],
+    },
+  },
+  {
+    name: "action_end",
+    description: "Complete, fail, block, or roll back an action-ledger record.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        actionId: { type: "string" },
+        status: { type: "string", enum: ["completed", "failed", "blocked", "rolled_back"] },
+        result: { type: "string" },
+        error: { type: "string" },
+      },
+      required: ["actionId", "status"],
+    },
+  },
+  {
+    name: "action_list",
+    description: "List typed agent actions and their lifecycle evidence.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { agentId: { type: "string" } },
+    },
+  },
+  {
+    name: "audit_bundle_export",
+    description: "Export the action ledger as a Merkle-rooted audit bundle.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { meta: { type: "object", description: "Optional bundle metadata" } },
+    },
+  },
+  {
+    name: "audit_bundle_verify",
+    description: "Verify the Merkle root of an exported action-ledger audit bundle.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { bundle: { type: "object", description: "Bundle returned by audit_bundle_export" } },
+      required: ["bundle"],
+    },
+  },
 ];
 
 // ─── Tool execution ─────────────────────────────────────────────────────────
@@ -1476,6 +1631,100 @@ export async function executeTool(agent: Agent, name: string, args: Record<strin
       return JSON.stringify(result, null, 2);
     }
 
+    case "charter_validate": {
+      const charter = validateCharter(args.charter);
+      return JSON.stringify({ valid: true, charter }, null, 2);
+    }
+
+    case "policy_lint": {
+      return JSON.stringify(lintPolicy(args.policy as Policy), null, 2);
+    }
+
+    case "policy_set": {
+      const policy = args.policy
+        ? args.policy as Policy
+        : buildRiskPolicy({
+            approvalThresholdUsd: args.approvalThresholdUsd,
+            hardCapUsd: args.hardCapUsd,
+            blockTargets: args.blockTargets,
+          });
+      const report = lintPolicy(policy);
+      if (!report.ok) {
+        const errors = report.issues.filter(i => i.severity === "error").map(i => i.message);
+        throw new Error(`Policy failed lint: ${errors.join("; ")}`);
+      }
+      _activePolicy = compilePolicy(policy);
+      _governanceLedger.auditChain().emit("policy.set", {
+        policy_id: policy.id,
+        version: policy.version,
+        rule_count: policy.rules.length,
+      });
+      return JSON.stringify({ active: true, policy, lint: report }, null, 2);
+    }
+
+    case "policy_evaluate": {
+      const action = policyActionFromArgs(args);
+      const risk = classifyRisk(action);
+      const verdict = evaluateAction(_activePolicy, action, { rate_counter: _governanceRateCounter });
+      _governanceLedger.auditChain().emit("policy.evaluated", { action, risk, verdict });
+      return JSON.stringify({ action, risk, verdict, policy: _activePolicy.policy.id }, null, 2);
+    }
+
+    case "risk_classify": {
+      const action = policyActionFromArgs(args);
+      return JSON.stringify({ action, risk: classifyRisk(action) }, null, 2);
+    }
+
+    case "action_begin": {
+      const risk = args.risk ?? classifyRisk({
+        kind: "tool_call",
+        target: args.intent,
+        args_text: args.plan,
+      }).level;
+      const record = _governanceLedger.begin({
+        agent_id: args.agentId || process.env.MNEMOPAY_AGENT_ID || "mcp-agent",
+        intent: args.intent,
+        plan: args.plan,
+        risk,
+      });
+      return JSON.stringify(record, null, 2);
+    }
+
+    case "action_update": {
+      const record = _governanceLedger.update(args.actionId, {
+        tools_used: args.toolsUsed,
+        memories_used: args.memoriesUsed,
+        files_accessed: args.filesAccessed,
+        sites_visited: args.sitesVisited,
+        cost_usd: args.costUsd,
+        plan: args.plan,
+        rollback: args.rollback,
+      });
+      if (args.executing) _governanceLedger.markExecuting(args.actionId);
+      return JSON.stringify(_governanceLedger.get(record.id), null, 2);
+    }
+
+    case "action_end": {
+      const record =
+        args.status === "completed" ? _governanceLedger.complete(args.actionId, args.result) :
+        args.status === "failed" ? _governanceLedger.fail(args.actionId, args.error || "Action failed") :
+        args.status === "blocked" ? _governanceLedger.block(args.actionId, args.error || "Action blocked") :
+        _governanceLedger.rollBack(args.actionId, args.result);
+      return JSON.stringify(record, null, 2);
+    }
+
+    case "action_list": {
+      return JSON.stringify(_governanceLedger.list(args.agentId), null, 2);
+    }
+
+    case "audit_bundle_export": {
+      return JSON.stringify(_governanceLedger.auditChain().toBundle(args.meta || {}), null, 2);
+    }
+
+    case "audit_bundle_verify": {
+      return JSON.stringify(verifyBundle(args.bundle as ChainBundle), null, 2);
+    }
+
     // ── Payouts (Paystack) ──────────────────────────────────────────────
 
     case "payout_create": {
@@ -1627,6 +1876,19 @@ export async function executeTool(agent: Agent, name: string, args: Record<strin
 
 const _merkleTree = new MerkleTree();
 const _ewmaDetector = new EWMADetector(0.15, 2.5, 3.5, 10);
+const _governanceLedger = new ActionLedger();
+const _governanceRateCounter = new InMemoryRateCounter();
+let _activePolicy: CompiledPolicy = compilePolicy(buildRiskPolicy());
+
+function policyActionFromArgs(args: Record<string, any>): PolicyAction {
+  return {
+    kind: args.kind,
+    target: args.target,
+    ...(args.estimatedUsd !== undefined ? { estimated_usd: args.estimatedUsd } : {}),
+    ...(args.argsText ? { args_text: args.argsText } : {}),
+    ...(args.locale ? { locale: args.locale } : {}),
+  };
+}
 
 // ── Approval queues (HITL) ──────────────────────────────────────────────────
 // Backed by SQLite — `pod restart drops pending approvals` was a hard blocker

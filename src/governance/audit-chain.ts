@@ -186,10 +186,14 @@ export interface ChainBundle<TMeta extends Record<string, unknown> = Record<stri
 
 /** Stable JSON canonicalisation: sorted keys, no whitespace. */
 export function canonicalize(value: unknown): string {
+  if (value === undefined) return "null";
   if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return "[" + value.map(canonicalize).join(",") + "]";
+  if (Array.isArray(value)) return "[" + value.map((item) => canonicalize(item)).join(",") + "]";
   const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
+  // Match JSON transport semantics: undefined object properties disappear,
+  // while undefined array entries become null. Otherwise a bundle can verify
+  // in memory but fail after JSON.stringify/parse.
+  const keys = Object.keys(obj).filter((key) => obj[key] !== undefined).sort();
   return "{" + keys.map((k) => JSON.stringify(k) + ":" + canonicalize(obj[k])).join(",") + "}";
 }
 
