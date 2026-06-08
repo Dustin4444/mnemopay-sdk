@@ -8,7 +8,7 @@
  *
  * Usage:
  *   npx @mnemopay/mcp-server                         # stdio, essentials (default)
- *   npx @mnemopay/mcp-server --tools=all             # all 51 tools
+ *   npx @mnemopay/mcp-server --tools=all             # all 60 tools
  *   npx @mnemopay/mcp-server --tools=memory,wallet   # memory + wallet only
  *   npx @mnemopay/mcp-server --http --port 3200      # HTTP/SSE mode
  *
@@ -24,8 +24,10 @@
  *   fico        agent_fico_score/behavioral/anomaly/fraud/reputation
  *   security    memory_integrity_check/history_export
  *   governance  charter/policy/risk/action-ledger/audit-bundle tools
+ *   identity    KYA identity + scoped capability tokens + kill switch
+ *   skills      governed declarative skill policy preview/execution plan
  *   agent       essentials + commerce + hitl + payments + webhooks
- *   all         every tool (51)
+ *   all         every tool (60)
  *
  * Environment:
  *   MNEMOPAY_TOOLS      — Comma-separated group list (alternative to --tools)
@@ -47,7 +49,8 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { MnemoPay, MnemoPayLite, RateLimiter, constantTimeEqual, AgentCreditScore, MerkleTree, BehavioralEngine, EWMADetector } from "../index.js";
+import { MnemoPay, MnemoPayLite, RateLimiter, constantTimeEqual, AgentCreditScore, MerkleTree, BehavioralEngine, EWMADetector, IdentityRegistry } from "../index.js";
+import type { Permission } from "../identity.js";
 import { StripeRail, LightningRail, MockRail } from "../rails/index.js";
 import { PaystackRail } from "../rails/paystack.js";
 import type { PaymentRail } from "../rails/index.js";
@@ -68,6 +71,8 @@ import {
   verifyBundle,
 } from "../governance/index.js";
 import type { ChainBundle, CompiledPolicy, Policy, PolicyAction } from "../governance/index.js";
+import { policyForSkill, runSkill } from "../skills/index.js";
+import type { MnemoSkill, SkillActRequest, SkillPermissions } from "../skills/index.js";
 import * as fs from "fs";
 
 // ─── Security: MCP-level rate limiter ────────────────────────────────────────
@@ -235,11 +240,17 @@ const TOOL_GROUPS: Record<string, string[]> = {
     "action_begin", "action_update", "action_end", "action_list",
     "audit_bundle_export", "audit_bundle_verify",
   ],
+  identity: [
+    "identity_create", "identity_get",
+    "capability_issue", "capability_validate", "capability_list", "capability_revoke",
+    "identity_killswitch",
+  ],
+  skills: ["skill_policy_preview", "skill_run_plan"],
 };
 
 const GROUP_ALIASES: Record<string, string[]> = {
   essentials: ["memory", "wallet", "tx"],
-  agent: ["memory", "wallet", "tx", "commerce", "hitl", "payments", "webhooks", "governance"],
+  agent: ["memory", "wallet", "tx", "commerce", "hitl", "payments", "webhooks", "governance", "identity", "skills"],
   all: Object.keys(TOOL_GROUPS),
 };
 
@@ -1074,6 +1085,123 @@ const TOOLS = [
       required: ["bundle"],
     },
   },
+  // Identity and capability controls
+  {
+    name: "identity_create",
+    description: "Create a KYA agent identity. Private key material is never returned.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agentId: { type: "string" },
+        ownerId: { type: "string" },
+        ownerEmail: { type: "string" },
+        displayName: { type: "string" },
+        capabilities: { type: "array", items: { type: "string" } },
+        ownerType: { type: "string", enum: ["individual", "organization"] },
+        ownerCountry: { type: "string" },
+      },
+      required: ["agentId", "ownerId", "ownerEmail"],
+    },
+  },
+  {
+    name: "identity_get",
+    description: "Get public KYA identity information and active capability-token count.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { agentId: { type: "string" } },
+      required: ["agentId"],
+    },
+  },
+  {
+    name: "capability_issue",
+    description: "Issue a scoped, expiring capability token to an existing agent identity.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agentId: { type: "string" },
+        permissions: { type: "array", items: { type: "string", enum: ["charge", "settle", "refund", "remember", "recall", "transfer", "subscribe", "credit", "sign", "admin"] } },
+        maxAmount: { type: "number", minimum: 0 },
+        maxTotalSpend: { type: "number", minimum: 0 },
+        allowedCounterparties: { type: "array", items: { type: "string" } },
+        allowedCategories: { type: "array", items: { type: "string" } },
+        expiresInMinutes: { type: "number", minimum: 1 },
+        issuedBy: { type: "string" },
+      },
+      required: ["agentId", "permissions"],
+    },
+  },
+  {
+    name: "capability_validate",
+    description: "Validate a capability token for an action, amount, and optional counterparty.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        tokenId: { type: "string" },
+        action: { type: "string", enum: ["charge", "settle", "refund", "remember", "recall", "transfer", "subscribe", "credit", "sign", "admin"] },
+        amount: { type: "number", minimum: 0 },
+        counterpartyId: { type: "string" },
+      },
+      required: ["tokenId", "action"],
+    },
+  },
+  {
+    name: "capability_list",
+    description: "List active capability tokens for an agent.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { agentId: { type: "string" } },
+      required: ["agentId"],
+    },
+  },
+  {
+    name: "capability_revoke",
+    description: "Immediately revoke one capability token.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { tokenId: { type: "string" } },
+      required: ["tokenId"],
+    },
+  },
+  {
+    name: "identity_killswitch",
+    description: "Emergency stop: immediately revoke every active capability token for one agent.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { agentId: { type: "string" }, reason: { type: "string" } },
+      required: ["agentId", "reason"],
+    },
+  },
+  // Governed declarative skills
+  {
+    name: "skill_policy_preview",
+    description: "Compile and preview the policy derived from a governed skill's declared permissions.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        skillId: { type: "string" },
+        permissions: { type: "object" },
+      },
+      required: ["skillId", "permissions"],
+    },
+  },
+  {
+    name: "skill_run_plan",
+    description: "Run a declarative sequence of proposed actions through MnemoSkills governance without executing external side effects.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        skillId: { type: "string" },
+        name: { type: "string" },
+        purpose: { type: "string" },
+        version: { type: "string" },
+        owner: { type: "string" },
+        permissions: { type: "object" },
+        actions: { type: "array", items: { type: "object" } },
+        agentId: { type: "string" },
+      },
+      required: ["skillId", "purpose", "permissions", "actions"],
+    },
+  },
 ];
 
 // ─── Tool execution ─────────────────────────────────────────────────────────
@@ -1725,6 +1853,82 @@ export async function executeTool(agent: Agent, name: string, args: Record<strin
       return JSON.stringify(verifyBundle(args.bundle as ChainBundle), null, 2);
     }
 
+    case "identity_create": {
+      _identityRegistry.createIdentity(args.agentId, args.ownerId, args.ownerEmail, {
+        displayName: args.displayName,
+        capabilities: args.capabilities,
+        ownerType: args.ownerType,
+        ownerCountry: args.ownerCountry,
+      });
+      const identity = _identityRegistry.getIdentity(args.agentId);
+      _governanceLedger.auditChain().emit("identity.created", { agent_id: args.agentId, owner_id: args.ownerId });
+      return JSON.stringify(identity, null, 2);
+    }
+
+    case "identity_get": {
+      const identity = _identityRegistry.getIdentity(args.agentId);
+      if (!identity) throw new Error(`Unknown agent: ${args.agentId}`);
+      return JSON.stringify({ identity, activeTokenCount: _identityRegistry.listActiveTokens(args.agentId).length }, null, 2);
+    }
+
+    case "capability_issue": {
+      const token = _identityRegistry.issueToken(args.agentId, args.permissions as Permission[], {
+        maxAmount: args.maxAmount,
+        maxTotalSpend: args.maxTotalSpend,
+        allowedCounterparties: args.allowedCounterparties,
+        allowedCategories: args.allowedCategories,
+        expiresInMinutes: args.expiresInMinutes,
+        issuedBy: args.issuedBy,
+      });
+      _governanceLedger.auditChain().emit("capability.issued", {
+        token_id: token.id, agent_id: token.agentId, permissions: token.permissions, expires_at: token.expiresAt,
+      });
+      return JSON.stringify(token, null, 2);
+    }
+
+    case "capability_validate": {
+      return JSON.stringify(_identityRegistry.validateToken(
+        args.tokenId, args.action as Permission, args.amount, args.counterpartyId,
+      ), null, 2);
+    }
+
+    case "capability_list": {
+      return JSON.stringify(_identityRegistry.listActiveTokens(args.agentId), null, 2);
+    }
+
+    case "capability_revoke": {
+      _identityRegistry.revokeToken(args.tokenId);
+      _governanceLedger.auditChain().emit("capability.revoked", { token_id: args.tokenId });
+      return JSON.stringify({ revoked: true, tokenId: args.tokenId }, null, 2);
+    }
+
+    case "identity_killswitch": {
+      const revoked = _identityRegistry.revokeAllTokens(args.agentId);
+      _governanceLedger.auditChain().emit("identity.killswitch", {
+        agent_id: args.agentId, reason: args.reason, revoked_tokens: revoked,
+      });
+      return JSON.stringify({ agentId: args.agentId, revokedTokens: revoked, status: "halted", reason: args.reason }, null, 2);
+    }
+
+    case "skill_policy_preview": {
+      const skill = declarativeSkill({
+        skillId: args.skillId, purpose: `Preview policy for ${args.skillId}`, permissions: args.permissions, actions: [],
+      });
+      return JSON.stringify(policyForSkill(skill).policy, null, 2);
+    }
+
+    case "skill_run_plan": {
+      const skill = declarativeSkill(args);
+      const result = await runSkill(skill, { actions: args.actions }, {
+        agent_id: args.agentId || process.env.MNEMOPAY_AGENT_ID || "mcp-agent",
+        ledger: _governanceLedger,
+      });
+      return JSON.stringify({
+        ok: result.ok, output: result.output, error: result.error, action_id: result.action_id,
+        pending_approval_id: result.pending_approval_id, action: result.ledger.get(result.action_id),
+      }, null, 2);
+    }
+
     // ── Payouts (Paystack) ──────────────────────────────────────────────
 
     case "payout_create": {
@@ -1879,6 +2083,7 @@ const _ewmaDetector = new EWMADetector(0.15, 2.5, 3.5, 10);
 const _governanceLedger = new ActionLedger();
 const _governanceRateCounter = new InMemoryRateCounter();
 let _activePolicy: CompiledPolicy = compilePolicy(buildRiskPolicy());
+const _identityRegistry = new IdentityRegistry();
 
 function policyActionFromArgs(args: Record<string, any>): PolicyAction {
   return {
@@ -1887,6 +2092,30 @@ function policyActionFromArgs(args: Record<string, any>): PolicyAction {
     ...(args.estimatedUsd !== undefined ? { estimated_usd: args.estimatedUsd } : {}),
     ...(args.argsText ? { args_text: args.argsText } : {}),
     ...(args.locale ? { locale: args.locale } : {}),
+  };
+}
+
+function declarativeSkill(args: Record<string, any>): MnemoSkill<{ actions: SkillActRequest[] }, {
+  grants: Array<SkillActRequest & { grant: unknown }>;
+}> {
+  const permissions = args.permissions as SkillPermissions;
+  const actions = (args.actions ?? []) as SkillActRequest[];
+  return {
+    id: args.skillId,
+    name: args.name || args.skillId,
+    purpose: args.purpose,
+    version: args.version || "1.0.0",
+    owner: args.owner || "mcp-operator",
+    permissions,
+    run(ctx) {
+      const grants = [];
+      for (const action of actions) {
+        const grant = ctx.act(action);
+        grants.push({ ...action, grant });
+        if (!grant.allowed) break;
+      }
+      return { grants };
+    },
   };
 }
 
