@@ -2537,8 +2537,8 @@ describe("Agent FICO — Score Computation", () => {
   });
 
   it("rejects deserialized score outside 300-850", () => {
-    expect(() => AgentFICO.deserialize('{"score": 200}')).toThrow("Invalid FICO score");
-    expect(() => AgentFICO.deserialize('{"score": 900}')).toThrow("Invalid FICO score");
+    expect(() => AgentFICO.deserialize('{"score": 200}')).toThrow("Invalid reputation score");
+    expect(() => AgentFICO.deserialize('{"score": 900}')).toThrow("Invalid reputation score");
   });
 
   it("computes confidence logarithmically", () => {

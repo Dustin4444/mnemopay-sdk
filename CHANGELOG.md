@@ -4,6 +4,25 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [1.12.1] - 2026-06-08
+
+### Added
+
+- Expanded the unified MCP server to 95 tools, including governance,
+  action-ledger, identity, governed-skill, GridStamp spatial-evidence,
+  Agent OS job, organization administration, and operator-control tools.
+- Added durable MCP controls for hosted browser, code, computer, skill, and
+  brain jobs, including retries, cancellation, alerts, usage, and audit export.
+- Added organization member, invitation, policy, agent, limit, approval,
+  process pause/resume, and emergency-stop controls.
+
+### Fixed
+
+- Clean `dist` before builds and exclude internal tests and benchmarks from
+  published npm packages.
+- Updated the legacy AgentFICO validation assertion to the current Agent
+  Reputation Scoring terminology.
+
 ## [1.11.1] - 2026-05-26
 
 ### Security
