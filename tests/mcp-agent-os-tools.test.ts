@@ -7,6 +7,7 @@ const envKeys = [
   "MNEMOPAY_ORG_ID",
   "MNEMOPAY_ORG_API_KEY",
   "MNEMOPAY_IDENTITY",
+  "MNEMOPAY_OPERATOR_API_KEY",
 ] as const;
 const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
 
@@ -16,6 +17,7 @@ describe("MCP Agent OS tools", () => {
     process.env.MNEMOPAY_ORG_ID = "org/a";
     process.env.MNEMOPAY_ORG_API_KEY = "org-secret";
     process.env.MNEMOPAY_IDENTITY = "operator@example.com";
+    process.env.MNEMOPAY_OPERATOR_API_KEY = "operator-secret";
     vi.stubGlobal("fetch", vi.fn(async () => ({
       ok: true,
       status: 202,
@@ -81,6 +83,34 @@ describe("MCP Agent OS tools", () => {
     })));
     await expect(executeTool(agent, "agent_os_alerts", {})).rejects.toThrow(
       "Agent OS gateway returned 403: forbidden",
+    );
+  });
+
+  it("updates members through organization-scoped role enforcement", async () => {
+    await executeTool(agent, "organization_member_update", {
+      identity: "member@example.com",
+      role: "approver",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "https://gateway.example.com/api/v1/platform/organizations/org%2Fa/members/member%40example.com",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ role: "approver" }),
+      }),
+    );
+  });
+
+  it("uses separate operator credentials for emergency controls", async () => {
+    await executeTool(agent, "operator_process_estop", { processId: "process/1" });
+    expect(fetch).toHaveBeenCalledWith(
+      "https://gateway.example.com/api/v1/operator/processes/process%2F1/estop",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          authorization: "Bearer operator-secret",
+          "content-type": "application/json",
+        },
+      }),
     );
   });
 });

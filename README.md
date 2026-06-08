@@ -609,15 +609,15 @@ tx by default so it doesn't tax your agent's context budget.
 Need more? Opt in explicitly:
 
 ```bash
-npx @mnemopay/sdk --tools=all       # all 70 tools
+npx @mnemopay/sdk --tools=all       # all 95 tools
 npx @mnemopay/sdk --tools=agent     # essentials + commerce + hitl + payments + webhooks
 npx @mnemopay/sdk --tools=reputation  # Agent Reputation Scoring only
 ```
 
 Groups: `memory`, `wallet`, `tx`, `commerce`, `hitl`, `payments`, `webhooks`,
 `reputation`, `security`, `governance`, `identity`, `skills`, `spatial`,
-`agent_os`. Aliases: `essentials` (default), `agent`, `all`. Also settable via
-`MNEMOPAY_TOOLS` env var.
+`agent_os`, `organization_admin`, `operator`. Aliases: `essentials` (default),
+`agent`, `all`. Also settable via `MNEMOPAY_TOOLS` env var.
 
 > **Breaking change in v1.3.0:** default was `all`, now `essentials`. If you
 > relied on commerce/hitl/webhooks/fico/security being available without a

@@ -8,7 +8,7 @@
  *
  * Usage:
  *   npx @mnemopay/mcp-server                         # stdio, essentials (default)
- *   npx @mnemopay/mcp-server --tools=all             # all 70 tools
+ *   npx @mnemopay/mcp-server --tools=all             # all 95 tools
  *   npx @mnemopay/mcp-server --tools=memory,wallet   # memory + wallet only
  *   npx @mnemopay/mcp-server --http --port 3200      # HTTP/SSE mode
  *
@@ -28,8 +28,10 @@
  *   skills      governed declarative skill policy preview/execution plan
  *   spatial     GridStamp evidence validation/attachment/audit export
  *   agent_os    durable browser/code/computer/skill/brain jobs + operations
+ *   organization_admin  members/invitations/policies/agents/limits
+ *   operator    processes/approvals/activity/emergency controls
  *   agent       essentials + commerce + hitl + payments + webhooks
- *   all         every tool (70)
+ *   all         every tool (95)
  *
  * Environment:
  *   MNEMOPAY_TOOLS      — Comma-separated group list (alternative to --tools)
@@ -256,6 +258,17 @@ const TOOL_GROUPS: Record<string, string[]> = {
   agent_os: [
     "agent_os_job_create", "agent_os_jobs", "agent_os_job_retry", "agent_os_job_cancel",
     "agent_os_alerts", "agent_os_usage", "agent_os_audit_export",
+  ],
+  organization_admin: [
+    "organization_get", "organization_members", "organization_member_add", "organization_member_update",
+    "organization_member_remove", "organization_invitations", "organization_invite", "organization_invite_revoke",
+    "organization_policies", "organization_policy_create", "organization_policy_update", "organization_policy_delete",
+    "organization_agents", "organization_agent_create", "organization_agent_update", "organization_agent_delete",
+    "organization_limits_update",
+  ],
+  operator: [
+    "operator_processes", "operator_process_get", "operator_process_pause", "operator_process_resume",
+    "operator_process_estop", "operator_approvals", "operator_approval_decide", "operator_activity",
   ],
 };
 
@@ -1289,6 +1302,31 @@ const TOOLS = [
     description: "Export the organization-scoped Agent OS audit log.",
     inputSchema: { type: "object" as const, properties: {} },
   },
+  { name: "organization_get", description: "Read the configured Agent OS organization.", inputSchema: { type: "object" as const, properties: {} } },
+  { name: "organization_members", description: "List organization members and roles.", inputSchema: { type: "object" as const, properties: {} } },
+  { name: "organization_member_add", description: "Add an organization member.", inputSchema: { type: "object" as const, properties: { identity: { type: "string" }, role: { type: "string", enum: ["owner", "admin", "operator", "approver", "viewer", "worker"] } }, required: ["identity", "role"] } },
+  { name: "organization_member_update", description: "Update an organization member role.", inputSchema: { type: "object" as const, properties: { identity: { type: "string" }, role: { type: "string", enum: ["owner", "admin", "operator", "approver", "viewer", "worker"] } }, required: ["identity", "role"] } },
+  { name: "organization_member_remove", description: "Remove an organization member.", inputSchema: { type: "object" as const, properties: { identity: { type: "string" } }, required: ["identity"] } },
+  { name: "organization_invitations", description: "List organization invitations.", inputSchema: { type: "object" as const, properties: {} } },
+  { name: "organization_invite", description: "Invite a member to the organization.", inputSchema: { type: "object" as const, properties: { email: { type: "string" }, role: { type: "string", enum: ["admin", "operator", "approver", "viewer", "worker"] }, expiresInHours: { type: "integer", minimum: 1, maximum: 720 } }, required: ["email", "role"] } },
+  { name: "organization_invite_revoke", description: "Revoke a pending organization invitation.", inputSchema: { type: "object" as const, properties: { invitationId: { type: "string" } }, required: ["invitationId"] } },
+  { name: "organization_policies", description: "List organization policies.", inputSchema: { type: "object" as const, properties: {} } },
+  { name: "organization_policy_create", description: "Create an organization policy.", inputSchema: { type: "object" as const, properties: { name: { type: "string" }, rules: { type: "object" }, active: { type: "boolean" } }, required: ["name", "rules"] } },
+  { name: "organization_policy_update", description: "Update an organization policy.", inputSchema: { type: "object" as const, properties: { policyId: { type: "string" }, name: { type: "string" }, rules: { type: "object" }, active: { type: "boolean" } }, required: ["policyId"] } },
+  { name: "organization_policy_delete", description: "Delete an organization policy.", inputSchema: { type: "object" as const, properties: { policyId: { type: "string" } }, required: ["policyId"] } },
+  { name: "organization_agents", description: "List organization agents.", inputSchema: { type: "object" as const, properties: {} } },
+  { name: "organization_agent_create", description: "Create a governed organization agent.", inputSchema: { type: "object" as const, properties: { agentId: { type: "string" }, name: { type: "string" }, monthlyBudgetUsd: { type: "number", minimum: 0 }, policyId: { type: "string" } }, required: ["agentId", "name"] } },
+  { name: "organization_agent_update", description: "Update a governed organization agent.", inputSchema: { type: "object" as const, properties: { id: { type: "string" }, name: { type: "string" }, status: { type: "string", enum: ["active", "paused", "disabled"] }, monthlyBudgetUsd: { type: "number", minimum: 0 }, policyId: { type: ["string", "null"] } }, required: ["id"] } },
+  { name: "organization_agent_delete", description: "Delete a governed organization agent.", inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] } },
+  { name: "organization_limits_update", description: "Operator-only update of organization agent, job, and browser budget limits.", inputSchema: { type: "object" as const, properties: { agentLimit: { type: "integer", minimum: 1 }, monthlyJobLimit: { type: "integer", minimum: 1 }, monthlyBrowserBudgetUsd: { type: "number", minimum: 0 } } } },
+  { name: "operator_processes", description: "List managed Agent OS processes.", inputSchema: { type: "object" as const, properties: {} } },
+  { name: "operator_process_get", description: "Read one managed Agent OS process.", inputSchema: { type: "object" as const, properties: { processId: { type: "string" } }, required: ["processId"] } },
+  { name: "operator_process_pause", description: "Pause one managed Agent OS process.", inputSchema: { type: "object" as const, properties: { processId: { type: "string" } }, required: ["processId"] } },
+  { name: "operator_process_resume", description: "Resume one managed Agent OS process.", inputSchema: { type: "object" as const, properties: { processId: { type: "string" } }, required: ["processId"] } },
+  { name: "operator_process_estop", description: "Emergency-stop one managed Agent OS process.", inputSchema: { type: "object" as const, properties: { processId: { type: "string" } }, required: ["processId"] } },
+  { name: "operator_approvals", description: "List pending Agent OS approvals.", inputSchema: { type: "object" as const, properties: {} } },
+  { name: "operator_approval_decide", description: "Approve or reject an Agent OS approval request.", inputSchema: { type: "object" as const, properties: { approvalId: { type: "string" }, decision: { type: "string", enum: ["approve", "reject"] }, decidedBy: { type: "string" }, notes: { type: "string" } }, required: ["approvalId", "decision", "decidedBy"] } },
+  { name: "operator_activity", description: "List Agent OS operator activity.", inputSchema: { type: "object" as const, properties: { limit: { type: "integer", minimum: 1, maximum: 1000 }, processId: { type: "string" } } } },
 ];
 
 // ─── Tool execution ─────────────────────────────────────────────────────────
@@ -2084,6 +2122,85 @@ export async function executeTool(agent: Agent, name: string, args: Record<strin
     case "agent_os_audit_export":
       return JSON.stringify(await agentOsRequest("GET", "/audit-export"), null, 2);
 
+    case "organization_get":
+      return JSON.stringify(await agentOsRequest("GET", ""), null, 2);
+    case "organization_members":
+      return JSON.stringify(await agentOsRequest("GET", "/members"), null, 2);
+    case "organization_member_add":
+      return JSON.stringify(await agentOsRequest("POST", "/members", { identity: args.identity, role: args.role }), null, 2);
+    case "organization_member_update":
+      return JSON.stringify(await agentOsRequest("PATCH", `/members/${encodeURIComponent(args.identity)}`, { role: args.role }), null, 2);
+    case "organization_member_remove":
+      return JSON.stringify(await agentOsRequest("DELETE", `/members/${encodeURIComponent(args.identity)}`), null, 2);
+    case "organization_invitations":
+      return JSON.stringify(await agentOsRequest("GET", "/invitations"), null, 2);
+    case "organization_invite":
+      return JSON.stringify(await agentOsRequest("POST", "/invitations", {
+        email: args.email, role: args.role, expires_in_hours: args.expiresInHours ?? 168,
+      }), null, 2);
+    case "organization_invite_revoke":
+      return JSON.stringify(await agentOsRequest("DELETE", `/invitations/${encodeURIComponent(args.invitationId)}`), null, 2);
+    case "organization_policies":
+      return JSON.stringify(await agentOsRequest("GET", "/policies"), null, 2);
+    case "organization_policy_create":
+      return JSON.stringify(await agentOsRequest("POST", "/policies", {
+        name: args.name, rules: args.rules, active: args.active ?? true,
+      }), null, 2);
+    case "organization_policy_update":
+      return JSON.stringify(await agentOsRequest("PATCH", `/policies/${encodeURIComponent(args.policyId)}`, compactObject({
+        name: args.name, rules: args.rules, active: args.active,
+      })), null, 2);
+    case "organization_policy_delete":
+      return JSON.stringify(await agentOsRequest("DELETE", `/policies/${encodeURIComponent(args.policyId)}`), null, 2);
+    case "organization_agents":
+      return JSON.stringify(await agentOsRequest("GET", "/agents"), null, 2);
+    case "organization_agent_create":
+      return JSON.stringify(await agentOsRequest("POST", "/agents", compactObject({
+        agent_id: args.agentId, name: args.name, monthly_budget_usd: args.monthlyBudgetUsd ?? 100, policy_id: args.policyId,
+      })), null, 2);
+    case "organization_agent_update":
+      return JSON.stringify(await agentOsRequest("PATCH", `/agents/${encodeURIComponent(args.id)}`, compactObject({
+        name: args.name, status: args.status, monthly_budget_usd: args.monthlyBudgetUsd, policy_id: args.policyId,
+      })), null, 2);
+    case "organization_agent_delete":
+      return JSON.stringify(await agentOsRequest("DELETE", `/agents/${encodeURIComponent(args.id)}`), null, 2);
+    case "organization_limits_update":
+      return JSON.stringify(await operatorPlatformRequest("PATCH", "/operator-limits", compactObject({
+        agent_limit: args.agentLimit, monthly_job_limit: args.monthlyJobLimit,
+        monthly_browser_budget_usd: args.monthlyBrowserBudgetUsd,
+      })), null, 2);
+
+    case "operator_processes":
+      return JSON.stringify(await operatorRequest("GET", "/processes"), null, 2);
+    case "operator_process_get":
+      return JSON.stringify(await operatorRequest("GET", `/processes/${encodeURIComponent(args.processId)}`), null, 2);
+    case "operator_process_pause":
+      return JSON.stringify(await operatorRequest("POST", `/processes/${encodeURIComponent(args.processId)}/pause`), null, 2);
+    case "operator_process_resume":
+      return JSON.stringify(await operatorRequest("POST", `/processes/${encodeURIComponent(args.processId)}/resume`), null, 2);
+    case "operator_process_estop": {
+      const result = await operatorRequest("POST", `/processes/${encodeURIComponent(args.processId)}/estop`);
+      _governanceLedger.auditChain().emit("operator.process.estop", { process_id: args.processId });
+      return JSON.stringify(result, null, 2);
+    }
+    case "operator_approvals":
+      return JSON.stringify(await operatorRequest("GET", "/approvals"), null, 2);
+    case "operator_approval_decide": {
+      const result = await operatorRequest("POST", `/approvals/${encodeURIComponent(args.approvalId)}/decision`, compactObject({
+        decision: args.decision, decided_by: args.decidedBy, notes: args.notes,
+      }));
+      _governanceLedger.auditChain().emit("operator.approval.decided", {
+        approval_id: args.approvalId, decision: args.decision, decided_by: args.decidedBy,
+      });
+      return JSON.stringify(result, null, 2);
+    }
+    case "operator_activity": {
+      const query = new URLSearchParams(compactObject({
+        limit: args.limit?.toString(), process_id: args.processId,
+      }) as Record<string, string>).toString();
+      return JSON.stringify(await operatorRequest("GET", `/activity${query ? `?${query}` : ""}`), null, 2);
+    }
+
     // ── Payouts (Paystack) ──────────────────────────────────────────────
 
     case "payout_create": {
@@ -2242,7 +2359,7 @@ const _identityRegistry = new IdentityRegistry();
 const _spatialAudit = new MerkleAudit();
 
 async function agentOsRequest(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PATCH" | "DELETE",
   suffix: string,
   body?: Record<string, unknown>,
 ): Promise<unknown> {
@@ -2256,18 +2373,70 @@ async function agentOsRequest(
     );
   }
 
-  const response = await fetch(
+  return gatewayRequest(
     `${baseUrl}/api/v1/platform/organizations/${encodeURIComponent(orgId)}${suffix}`,
+    method,
     {
-      method,
-      headers: {
-        authorization: `Bearer ${orgKey}`,
-        "x-mnemopay-identity": identity,
-        "content-type": "application/json",
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
+      authorization: `Bearer ${orgKey}`,
+      "x-mnemopay-identity": identity,
     },
+    body,
   );
+}
+
+async function operatorPlatformRequest(
+  method: "PATCH",
+  suffix: string,
+  body: Record<string, unknown>,
+): Promise<unknown> {
+  const baseUrl = gatewayBaseUrl();
+  const orgId = process.env.MNEMOPAY_ORG_ID?.trim();
+  const operatorKey = process.env.MNEMOPAY_OPERATOR_API_KEY?.trim();
+  if (!orgId || !operatorKey) {
+    throw new Error("Agent OS operator is not configured. Set MNEMOPAY_ORG_ID and MNEMOPAY_OPERATOR_API_KEY.");
+  }
+  return gatewayRequest(
+    `${baseUrl}/api/v1/platform/organizations/${encodeURIComponent(orgId)}${suffix}`,
+    method,
+    { authorization: `Bearer ${operatorKey}` },
+    body,
+  );
+}
+
+async function operatorRequest(
+  method: "GET" | "POST",
+  suffix: string,
+  body?: Record<string, unknown>,
+): Promise<unknown> {
+  const operatorKey = process.env.MNEMOPAY_OPERATOR_API_KEY?.trim();
+  if (!operatorKey) throw new Error("Agent OS operator is not configured. Set MNEMOPAY_OPERATOR_API_KEY.");
+  return gatewayRequest(
+    `${gatewayBaseUrl()}/api/v1/operator${suffix}`,
+    method,
+    { authorization: `Bearer ${operatorKey}` },
+    body,
+  );
+}
+
+function gatewayBaseUrl(): string {
+  const baseUrl = process.env.MNEMOPAY_GATEWAY_URL?.trim().replace(/\/+$/, "");
+  if (!baseUrl?.startsWith("https://")) {
+    throw new Error("Agent OS gateway is not configured. Set an HTTPS MNEMOPAY_GATEWAY_URL.");
+  }
+  return baseUrl;
+}
+
+async function gatewayRequest(
+  url: string,
+  method: "GET" | "POST" | "PATCH" | "DELETE",
+  headers: Record<string, string>,
+  body?: Record<string, unknown>,
+): Promise<unknown> {
+  const response = await fetch(url, {
+    method,
+    headers: { ...headers, "content-type": "application/json" },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
   const text = await response.text();
   let parsed: unknown = {};
   try {
@@ -2279,6 +2448,10 @@ async function agentOsRequest(
     throw new Error(`Agent OS gateway returned ${response.status}: ${text.slice(0, 500)}`);
   }
   return parsed;
+}
+
+function compactObject(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }
 
 function policyActionFromArgs(args: Record<string, any>): PolicyAction {
