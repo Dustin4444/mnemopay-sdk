@@ -609,7 +609,7 @@ tx by default so it doesn't tax your agent's context budget.
 Need more? Opt in explicitly:
 
 ```bash
-npx @mnemopay/sdk --tools=all       # all 60 tools
+npx @mnemopay/sdk --tools=all       # all 63 tools
 npx @mnemopay/sdk --tools=agent     # essentials + commerce + hitl + payments + webhooks
 npx @mnemopay/sdk --tools=reputation  # Agent Reputation Scoring only
 ```

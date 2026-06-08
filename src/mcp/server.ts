@@ -8,7 +8,7 @@
  *
  * Usage:
  *   npx @mnemopay/mcp-server                         # stdio, essentials (default)
- *   npx @mnemopay/mcp-server --tools=all             # all 60 tools
+ *   npx @mnemopay/mcp-server --tools=all             # all 63 tools
  *   npx @mnemopay/mcp-server --tools=memory,wallet   # memory + wallet only
  *   npx @mnemopay/mcp-server --http --port 3200      # HTTP/SSE mode
  *
@@ -26,8 +26,9 @@
  *   governance  charter/policy/risk/action-ledger/audit-bundle tools
  *   identity    KYA identity + scoped capability tokens + kill switch
  *   skills      governed declarative skill policy preview/execution plan
+ *   spatial     GridStamp evidence validation/attachment/audit export
  *   agent       essentials + commerce + hitl + payments + webhooks
- *   all         every tool (60)
+ *   all         every tool (63)
  *
  * Environment:
  *   MNEMOPAY_TOOLS      — Comma-separated group list (alternative to --tools)
@@ -61,16 +62,20 @@ import { SQLiteAdapter } from "../recall/persistence/sqlite.js";
 import { localEmbed } from "../recall/engine.js";
 import {
   ActionLedger,
+  attachSpatialEvidence,
   buildRiskPolicy,
   classifyRisk,
   compilePolicy,
   evaluateAction,
   InMemoryRateCounter,
   lintPolicy,
+  MerkleAudit,
+  fingerprintSpatialEvidence,
   validateCharter,
+  verifySpatialEvidence,
   verifyBundle,
 } from "../governance/index.js";
-import type { ChainBundle, CompiledPolicy, Policy, PolicyAction } from "../governance/index.js";
+import type { ChainBundle, CompiledPolicy, Policy, PolicyAction, SpatialEvidence } from "../governance/index.js";
 import { policyForSkill, runSkill } from "../skills/index.js";
 import type { MnemoSkill, SkillActRequest, SkillPermissions } from "../skills/index.js";
 import * as fs from "fs";
@@ -246,11 +251,12 @@ const TOOL_GROUPS: Record<string, string[]> = {
     "identity_killswitch",
   ],
   skills: ["skill_policy_preview", "skill_run_plan"],
+  spatial: ["spatial_evidence_verify", "spatial_evidence_attach", "spatial_audit_export"],
 };
 
 const GROUP_ALIASES: Record<string, string[]> = {
   essentials: ["memory", "wallet", "tx"],
-  agent: ["memory", "wallet", "tx", "commerce", "hitl", "payments", "webhooks", "governance", "identity", "skills"],
+  agent: ["memory", "wallet", "tx", "commerce", "hitl", "payments", "webhooks", "governance", "identity", "skills", "spatial"],
   all: Object.keys(TOOL_GROUPS),
 };
 
@@ -1202,6 +1208,29 @@ const TOOLS = [
       required: ["skillId", "purpose", "permissions", "actions"],
     },
   },
+  {
+    name: "spatial_evidence_verify",
+    description: "Validate a GridStamp spatial-proof or SPZ evidence envelope before attachment.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { evidence: { type: "object" } },
+      required: ["evidence"],
+    },
+  },
+  {
+    name: "spatial_evidence_attach",
+    description: "Fail-closed attachment of GridStamp evidence to MnemoPay's spatial audit chain.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { evidence: { type: "object" } },
+      required: ["evidence"],
+    },
+  },
+  {
+    name: "spatial_audit_export",
+    description: "Export and verify the current spatial evidence audit chain.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
 ];
 
 // ─── Tool execution ─────────────────────────────────────────────────────────
@@ -1929,6 +1958,36 @@ export async function executeTool(agent: Agent, name: string, args: Record<strin
       }, null, 2);
     }
 
+    case "spatial_evidence_verify": {
+      const verification = verifySpatialEvidence(args.evidence);
+      const fingerprint = verification.ok
+        ? fingerprintSpatialEvidence(args.evidence as SpatialEvidence)
+        : undefined;
+      return JSON.stringify({ verification, fingerprint }, null, 2);
+    }
+
+    case "spatial_evidence_attach": {
+      const result = attachSpatialEvidence(_spatialAudit, args.evidence as SpatialEvidence);
+      _governanceLedger.auditChain().emit("spatial.evidence.attached", {
+        kind: args.evidence.kind,
+        fingerprint: result.fingerprint,
+      });
+      return JSON.stringify({
+        attached: true,
+        fingerprint: result.fingerprint,
+        auditDigest: _spatialAudit.finalize(),
+        eventCount: _spatialAudit.getEvents().length,
+      }, null, 2);
+    }
+
+    case "spatial_audit_export": {
+      return JSON.stringify({
+        verified: _spatialAudit.verify(),
+        auditDigest: _spatialAudit.finalize(),
+        ..._spatialAudit.toJSON(),
+      }, null, 2);
+    }
+
     // ── Payouts (Paystack) ──────────────────────────────────────────────
 
     case "payout_create": {
@@ -2084,6 +2143,7 @@ const _governanceLedger = new ActionLedger();
 const _governanceRateCounter = new InMemoryRateCounter();
 let _activePolicy: CompiledPolicy = compilePolicy(buildRiskPolicy());
 const _identityRegistry = new IdentityRegistry();
+const _spatialAudit = new MerkleAudit();
 
 function policyActionFromArgs(args: Record<string, any>): PolicyAction {
   return {
