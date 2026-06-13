@@ -32,6 +32,15 @@ export interface ClientConfig {
   timeoutMs?: number;
   /** Custom fetch implementation (for React Native polyfills, etc.) */
   fetch?: typeof globalThis.fetch;
+  /**
+   * Per-request agent identity (multi-tenant routing). When set, every request
+   * carries an `X-MnemoPay-Agent: <agentId>` header so a SHARED substrate
+   * (`mnemopay-mcp`) scopes the charge/settle/memory/ledger operation to THIS
+   * agent's wallet/context instead of the server's boot wallet. Omit it and the
+   * server falls back to its boot agent — existing single-tenant callers are
+   * unaffected.
+   */
+  agentId?: string;
 }
 
 export interface ApiResponse<T = any> {
@@ -107,12 +116,15 @@ export class MnemoPayClient {
   private token?: string;
   private timeoutMs: number;
   private _fetch: typeof globalThis.fetch;
+  /** Per-request tenant agent id sent as `X-MnemoPay-Agent` (multi-tenant). */
+  private agentId?: string;
 
   constructor(baseUrl: string, token?: string, config?: Partial<ClientConfig>) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.token = token;
     this.timeoutMs = config?.timeoutMs ?? 30_000;
     this._fetch = config?.fetch ?? globalThis.fetch.bind(globalThis);
+    this.agentId = config?.agentId?.trim() || undefined;
   }
 
   // ── Core HTTP ───────────────────────────────────────────────────────────
@@ -123,6 +135,10 @@ export class MnemoPayClient {
 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+    // Multi-tenant: scope this request to the configured tenant agent. A
+    // shared substrate routes the charge/settle/ledger to THIS agent's wallet;
+    // a single-tenant server ignores the header and uses its boot agent.
+    if (this.agentId) headers["X-MnemoPay-Agent"] = this.agentId;
 
     try {
       const res = await this._fetch(`${this.baseUrl}${path}`, {
