@@ -9,8 +9,13 @@ primary_region = 'dfw'
   NODE_ENV = 'production'
   MNEMOPAY_PERSIST_DIR = '/data'
   MNEMOPAY_URL = 'https://mnemopay-mcp.fly.dev'
-  PORTAL_URL = 'https://getbizsuite.com'
-  REQUIRE_PORTAL_AUTH = 'true'
+  # First-party metering profile: disable the 30-min settlement hold + relax the
+  # fraud/velocity gate so per-LLM-call micro-charges settle immediately.
+  MNEMOPAY_METERING = '1'
+  MNEMOPAY_AGENT_ID = 'mnemopay-ide'
+  # Auth is the simple Bearer MNEMOPAY_MCP_TOKEN (set as a secret), NOT the
+  # getbizsuite portal key flow — the IDE's MnemoPayClient sends Bearer only.
+  REQUIRE_PORTAL_AUTH = 'false'
 
 [mounts]
   source = 'mnemopay_data'

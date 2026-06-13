@@ -58,7 +58,7 @@ import type { Permission } from "../identity.js";
 import { StripeRail, LightningRail, MockRail } from "../rails/index.js";
 import { PaystackRail } from "../rails/paystack.js";
 import type { PaymentRail } from "../rails/index.js";
-import type { RequestContext } from "../fraud.js";
+import type { RequestContext, FraudConfig } from "../fraud.js";
 import { PersistentApprovalQueue } from "../storage/approval-queue.js";
 import { WebhookStore } from "../storage/webhooks.js";
 import { SQLiteAdapter } from "../recall/persistence/sqlite.js";
@@ -162,11 +162,45 @@ function createAgent(): Agent {
   }
 
   const recall = (process.env.MNEMOPAY_RECALL as "score" | "vector" | "hybrid") || undefined;
+
+  // ── Fraud / metering config from env ──────────────────────────────────────
+  // The stock FraudGuard defaults (30-min settlement hold, 0.75 block threshold,
+  // 5 charges/min) are tuned for adversarial third-party marketplace escrow and
+  // BREAK first-party metering (immediate per-LLM-call settle, rapid identical
+  // micro-charges). A metering deploy sets MNEMOPAY_METERING=1 to relax all of
+  // them; individual knobs can still be overridden via env. Receipt shape is
+  // unchanged — only the risk gate differs.
+  const metering =
+    process.env.MNEMOPAY_METERING === "1" || process.env.MNEMOPAY_METERING === "true";
+  const numEnv = (name: string): number | undefined => {
+    const v = process.env[name];
+    if (v === undefined || v === "") return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const fraudConfig: Partial<FraudConfig> = {};
+  if (metering) {
+    fraudConfig.settlementHoldMinutes = 0;
+    fraudConfig.blockThreshold = 1.01; // never hard-block first-party metering
+    fraudConfig.maxChargesPerMinute = 10_000;
+    fraudConfig.maxChargesPerHour = 100_000;
+    fraudConfig.maxChargesPerDay = 1_000_000;
+    fraudConfig.maxDailyVolume = 1_000_000;
+  }
+  // Per-knob env overrides (apply on top of, or instead of, the metering preset).
+  const holdMin = numEnv("MNEMOPAY_SETTLEMENT_HOLD_MINUTES");
+  if (holdMin !== undefined) fraudConfig.settlementHoldMinutes = holdMin;
+  const blockThr = numEnv("MNEMOPAY_BLOCK_THRESHOLD");
+  if (blockThr !== undefined) fraudConfig.blockThreshold = blockThr;
+  const maxPerMin = numEnv("MNEMOPAY_MAX_CHARGES_PER_MINUTE");
+  if (maxPerMin !== undefined) fraudConfig.maxChargesPerMinute = maxPerMin;
+
   const agent = MnemoPay.quick(agentId, {
     debug: process.env.DEBUG === "true",
     recall,
     openaiApiKey: process.env.OPENAI_API_KEY,
     paymentRail,
+    fraud: Object.keys(fraudConfig).length > 0 ? fraudConfig : undefined,
   });
 
   // Enable file persistence — always on by default.
