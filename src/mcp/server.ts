@@ -3025,7 +3025,23 @@ export async function startServer(): Promise<void> {
     app.use(portalKeyAuth);
 
     app.get("/health", (_req, res) => {
-      res.json({ status: "ok", mode: process.env.MNEMOPAY_MODE || "quick" });
+      res.json({
+        status: "ok",
+        mode: process.env.MNEMOPAY_MODE || "quick",
+        rail: (agent as any).paymentRail?.name || "mock",
+      });
+    });
+
+    // Operational info — surfaces the live payment rail so callers can
+    // confirm the server is on a real rail (not the in-memory MockRail).
+    app.get("/api/info", (_req, res) => {
+      res.json({
+        name: "MnemoPay MCP",
+        version: "1.2.0",
+        mode: process.env.MNEMOPAY_MODE || "quick",
+        rail: (agent as any).paymentRail?.name || "mock",
+        currency: process.env.STRIPE_CURRENCY || "usd",
+      });
     });
 
     // A2A Agent Card — makes this agent discoverable by other agents
