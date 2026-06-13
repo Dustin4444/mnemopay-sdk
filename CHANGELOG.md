@@ -4,6 +4,63 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [1.13.0] - 2026-06-13
+
+Additive minor: two new LLM-provider memory middlewares plus a normalized
+payment-rail capture-error type. Fully backward compatible with 1.12.x —
+only new symbols and new subpath exports.
+
+### Added
+
+- **Cohere middleware (`@mnemopay/sdk/middleware/cohere`)** — memory-injecting
+  wrapper for a `cohere-ai` v2 client. `CohereMiddleware.wrap(cohere, agent,
+  { recallLimit? })` returns a proxy whose `cohere.chat({ model, messages })`
+  recalls the top memories, injects them as a system turn, calls Cohere, and
+  stores the exchange via `agent.remember(...)`. Handles the Cohere v2
+  content-block-array response shape (`response.message.content[].text`).
+  Same recall → inject → store → return contract as the OpenAI / Anthropic /
+  Gemini middlewares.
+  ```ts
+  import { CohereClientV2 } from "cohere-ai";
+  import { CohereMiddleware } from "@mnemopay/sdk/middleware/cohere";
+
+  const cohere = CohereMiddleware.wrap(new CohereClientV2({ token }), agent);
+  const r = await cohere.chat({ model: "command-r-plus", messages: [...] });
+  ```
+- **Mistral middleware (`@mnemopay/sdk/middleware/mistral`)** — memory-injecting
+  wrapper for a `@mistralai/mistralai` client. `MistralMiddleware.wrap(client,
+  agent, { recallLimit? })` proxies `client.chat.complete({ model, messages })`
+  (one level deeper than OpenAI's `chat.completions.create`), injecting recalled
+  memories and persisting the exchange. OpenAI-compatible request/response
+  shape (`choices[0].message.content`).
+- **`RailCaptureError` (`@mnemopay/sdk/rails`)** — normalized capture-failure
+  error for payment rails. Wraps the raw provider error (Stripe `APIError`,
+  fetch `TypeError`, LND HTTP body, …) in a consistent shape while preserving
+  the underlying cause via `.originalError` (and `Error.cause`), and attaches
+  an actionable `hint` derived from the failure mode (insufficient funds,
+  idempotency reuse, expired auth, rate limit, auth/credentials, not-found,
+  network unreachable). Companion `runRailCapture(railName, ctx, exec)` helper
+  wraps a rail's capture execution and is idempotent (an existing
+  `RailCaptureError` is rethrown unchanged). Wired through the Paystack,
+  x402, and Google AP2 rail capture paths.
+- **New subpath exports** — `@mnemopay/sdk/middleware/cohere` and
+  `@mnemopay/sdk/middleware/mistral`.
+
+### Tests
+
+- `tests/middleware/cohere.test.ts`, `tests/middleware/mistral.test.ts`, and
+  `tests/rail-capture-error.test.ts` cover wrap shape, recall hook, custom
+  `recallLimit`, system-context injection, `agent.remember` write,
+  provider-error passthrough, and the capture-error hint mapping. Mocked
+  provider SDKs — no real network calls.
+
+### Docs
+
+- Added bundler/runtime integration guides: `docs/INTEGRATION-BUN.md`,
+  `docs/INTEGRATION-VITE.md`, `docs/INTEGRATION-WEBPACK.md`, plus the
+  official MCP registry manifests (`server.json`, `server.dns.json`) and
+  registry-publishing notes.
+
 ## [1.12.1] - 2026-06-08
 
 ### Added
