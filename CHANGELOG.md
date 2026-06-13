@@ -4,6 +4,25 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [1.13.1] - 2026-06-13
+
+Ships the `./recall/postgres` subpath export that landed on master
+(PostgresAdapter, PRs #16/#23) but was omitted from the 1.13.0 npm tarball —
+the 1.13.0 publish ran from a tree captured before that export was added to
+`package.json`, so consumers could not import `@mnemopay/sdk/recall/postgres`
+from 1.13.0 even though the compiled file shipped. 1.13.0 is immutable on npm,
+so this patch republishes the complete export map. Fully backward compatible.
+
+### Added
+
+- **`PostgresAdapter` (`@mnemopay/sdk/recall/postgres`)** — vendor-neutral
+  pgvector-backed recall persistence adapter for any Postgres (Neon, Supabase,
+  Amazon RDS/Aurora, Cloud SQL, or self-hosted). Subclass of the existing
+  `NeonAdapter` with an identical config shape; exposed so standalone SDK
+  consumers can discover it by name and via the `{ type: "postgres", url }`
+  persistence option. Requires the optional `pg` peer dep, dynamically
+  imported on first query. This export was missing from the 1.13.0 tarball.
+
 ## [1.13.0] - 2026-06-13
 
 Additive minor: two new LLM-provider memory middlewares plus a normalized
