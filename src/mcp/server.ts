@@ -113,19 +113,37 @@ type Agent = MnemoPayLite | MnemoPay;
 
 // ─── Agent initialization ───────────────────────────────────────────────────
 
-function createAgent(): Agent {
-  const agentId = process.env.MNEMOPAY_AGENT_ID || "mcp-agent";
-  const mode = process.env.MNEMOPAY_MODE || "quick";
+/**
+ * Resolve the per-process agent config (rail + fraud/metering knobs +
+ * persistence dir) ONCE so the boot agent and every per-tenant agent share the
+ * exact same posture. Building a fresh PaymentRail per tenant would be wasteful
+ * and (for Stripe) re-instantiate a client per tenant, so the rail instance is
+ * shared — it's stateless w.r.t. agent id (the agentId is passed per charge via
+ * createHold(amount, reason, agentId)). Only the wallet/ledger/memory (keyed by
+ * agentId inside MnemoPayLite) differ per tenant.
+ */
+interface ResolvedAgentConfig {
+  mode: "quick" | "production";
+  paymentRail?: PaymentRail;
+  fraud?: Partial<FraudConfig>;
+  recall?: "score" | "vector" | "hybrid";
+  debug: boolean;
+  openaiApiKey?: string;
+  /** Explicit persist dir to enablePersistence() on, or undefined to rely on auto-detect. */
+  persistDir?: string;
+  /** True when MNEMOPAY_PERSIST_DIR was explicitly set (auto-detect already covers it). */
+  persistDirIsEnv: boolean;
+}
+
+let _resolvedConfig: ResolvedAgentConfig | null = null;
+
+function resolveAgentConfig(): ResolvedAgentConfig {
+  if (_resolvedConfig) return _resolvedConfig;
+  const mode = (process.env.MNEMOPAY_MODE || "quick") === "production" ? "production" : "quick";
 
   if (mode === "production") {
-    return MnemoPay.create({
-      agentId,
-      mnemoUrl: process.env.MNEMO_URL || "http://localhost:8100",
-      agentpayUrl: process.env.AGENTPAY_URL || "http://localhost:3100",
-      mnemoApiKey: process.env.MNEMO_API_KEY,
-      agentpayApiKey: process.env.AGENTPAY_API_KEY,
-      debug: process.env.DEBUG === "true",
-    });
+    _resolvedConfig = { mode, debug: process.env.DEBUG === "true", persistDirIsEnv: false };
+    return _resolvedConfig;
   }
 
   // ── Payment rail selection ────────────────────────────────────────────────
@@ -195,25 +213,138 @@ function createAgent(): Agent {
   const maxPerMin = numEnv("MNEMOPAY_MAX_CHARGES_PER_MINUTE");
   if (maxPerMin !== undefined) fraudConfig.maxChargesPerMinute = maxPerMin;
 
-  const agent = MnemoPay.quick(agentId, {
-    debug: process.env.DEBUG === "true",
-    recall,
-    openaiApiKey: process.env.OPENAI_API_KEY,
-    paymentRail,
-    fraud: Object.keys(fraudConfig).length > 0 ? fraudConfig : undefined,
-  });
-
   // Enable file persistence — always on by default.
   // Priority: MNEMOPAY_PERSIST_DIR env > Fly.io /data > ~/.mnemopay/data
   const persistDir =
     process.env.MNEMOPAY_PERSIST_DIR ||
     (process.env.FLY_APP_NAME ? "/data" : undefined) ||
     require("path").join(require("os").homedir(), ".mnemopay", "data");
-  if (!process.env.MNEMOPAY_PERSIST_DIR) {
-    agent.enablePersistence(persistDir);
+
+  _resolvedConfig = {
+    mode,
+    paymentRail,
+    fraud: Object.keys(fraudConfig).length > 0 ? fraudConfig : undefined,
+    recall,
+    debug: process.env.DEBUG === "true",
+    openaiApiKey: process.env.OPENAI_API_KEY,
+    persistDir,
+    persistDirIsEnv: Boolean(process.env.MNEMOPAY_PERSIST_DIR),
+  };
+  return _resolvedConfig;
+}
+
+/**
+ * Build a single agent for a given agent id using the shared resolved config.
+ * The boot agent and every per-tenant agent come through here so they're
+ * identical except for their agent id (which keys the wallet/ledger/memory and
+ * the on-disk `${agentId}.json` persistence file).
+ */
+function buildAgentFor(agentId: string): Agent {
+  const cfg = resolveAgentConfig();
+
+  if (cfg.mode === "production") {
+    return MnemoPay.create({
+      agentId,
+      mnemoUrl: process.env.MNEMO_URL || "http://localhost:8100",
+      agentpayUrl: process.env.AGENTPAY_URL || "http://localhost:3100",
+      mnemoApiKey: process.env.MNEMO_API_KEY,
+      agentpayApiKey: process.env.AGENTPAY_API_KEY,
+      debug: cfg.debug,
+    });
+  }
+
+  const agent = MnemoPay.quick(agentId, {
+    debug: cfg.debug,
+    recall: cfg.recall,
+    openaiApiKey: cfg.openaiApiKey,
+    paymentRail: cfg.paymentRail,
+    fraud: cfg.fraud,
+  });
+
+  // Each tenant persists to its own `${agentId}.json` under the shared dir.
+  // When MNEMOPAY_PERSIST_DIR is set, MnemoPayLite already auto-enables it in
+  // its constructor — so we only call enablePersistence for the fallback dirs.
+  if (!cfg.persistDirIsEnv && cfg.persistDir) {
+    (agent as MnemoPayLite).enablePersistence(cfg.persistDir);
   }
 
   return agent;
+}
+
+function createAgent(): Agent {
+  return buildAgentFor(process.env.MNEMOPAY_AGENT_ID || "mcp-agent");
+}
+
+// ─── Per-tenant agent registry (multi-tenant wallet routing) ─────────────────
+//
+// One shared substrate, but each charge/settle/ledger entry is scoped to the
+// CALLING tenant's own agent id (sent via the `X-MnemoPay-Agent` header on the
+// REST/HTTP path, or the `_agentId` param on a direct MCP call). We lazily
+// build one MnemoPayLite per tenant id — each is its own wallet + double-entry
+// ledger + memory bank + `${agentId}.json` persistence file, so tenant A's
+// money and memories are physically isolated from tenant B's. No per-request
+// identity → the boot agent is used (existing single-tenant callers unchanged).
+//
+// Agent ids are validated to a safe charset to keep them filesystem-safe (they
+// become a persistence filename) and prevent traversal.
+
+const TENANT_AGENT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+
+export function isValidTenantAgentId(id: string): boolean {
+  return TENANT_AGENT_ID_RE.test(id) && !id.includes("..");
+}
+
+export class AgentRegistry {
+  private readonly cache = new Map<string, Agent>();
+  /** Cap the number of distinct tenant agents held in-process (DoS guard). */
+  static readonly MAX_TENANTS = 10_000;
+
+  constructor(private readonly bootAgent: Agent) {}
+
+  /** The process boot agent (fallback when no per-request identity is given). */
+  get boot(): Agent {
+    return this.bootAgent;
+  }
+
+  /**
+   * Resolve the agent for a request. `requestedAgentId` is the value from the
+   * `X-MnemoPay-Agent` header / `_agentId` param. Empty/undefined → boot agent.
+   * A request id equal to the boot agent's id also returns the boot agent (so
+   * the boot wallet is never duplicated).
+   */
+  resolve(requestedAgentId?: string | null): Agent {
+    const id = (requestedAgentId ?? "").trim();
+    if (!id) return this.bootAgent;
+    if (id === (this.bootAgent as any).agentId) return this.bootAgent;
+    if (!isValidTenantAgentId(id)) {
+      throw new Error("Invalid X-MnemoPay-Agent id");
+    }
+    let agent = this.cache.get(id);
+    if (!agent) {
+      if (this.cache.size >= AgentRegistry.MAX_TENANTS) {
+        throw new Error("Too many tenant agents in-process");
+      }
+      agent = buildAgentFor(id);
+      this.cache.set(id, agent);
+    }
+    return agent;
+  }
+
+  tenantIds(): string[] {
+    return [...this.cache.keys()];
+  }
+}
+
+/**
+ * Pull the per-request acting agent id out of MCP tool-call args. On the direct
+ * MCP path the calling tenant supplies an optional `_agentId` arg; on the
+ * REST/HTTP path it arrives as the `X-MnemoPay-Agent` header (resolved before
+ * this is reached). Returns undefined when no id was supplied so the boot agent
+ * is used — keeping single-tenant callers byte-for-byte unchanged.
+ */
+export function agentIdFromArgs(args: Record<string, any> | undefined): string | undefined {
+  const id = args && typeof args._agentId === "string" ? args._agentId.trim() : "";
+  return id || undefined;
 }
 
 // ─── Brain bridge (read-only) ────────────────────────────────────────────────
@@ -2654,6 +2785,10 @@ async function getCommerceEngine(agent: Agent): Promise<any> {
 
 export async function startServer(): Promise<void> {
   const agent = createAgent();
+  // Multi-tenant wallet routing: one boot agent + a lazily-built per-tenant
+  // agent (own wallet/ledger/memory/persistence file). When a request carries
+  // no identity, registry.resolve() returns the boot agent unchanged.
+  const registry = new AgentRegistry(agent);
 
   const allowedTools = resolveToolFilter(getToolFilterSpec(process.argv));
   const filteredTools = TOOLS.filter(t => allowedTools.has(t.name));
@@ -2694,7 +2829,11 @@ export async function startServer(): Promise<void> {
         }
       }
 
-      const result = await executeTool(agent, name, args ?? {});
+      // Multi-tenant routing: per-request acting agent from optional `_agentId`
+      // arg. No id → boot agent (single-tenant behavior unchanged). Invalid /
+      // traversal ids are rejected inside registry.resolve().
+      const actingAgent = registry.resolve(agentIdFromArgs(args ?? {}));
+      const result = await executeTool(actingAgent, name, args ?? {});
       return { content: [{ type: "text", text: result }] };
     } catch (err: any) {
       // Security: sanitize error messages — never leak internal state
@@ -3181,7 +3320,13 @@ export async function startServer(): Promise<void> {
       }
       const start = Date.now();
       try {
-        const result = await executeTool(agent, toolName, req.body ?? {});
+        // Multi-tenant routing: acting agent from the `X-MnemoPay-Agent`
+        // header. Absent → boot agent. Invalid/traversal ids throw (caught
+        // below → 400). Header may arrive as a string or string[].
+        const rawAgentHeader = req.headers["x-mnemopay-agent"];
+        const requestedAgentId = Array.isArray(rawAgentHeader) ? rawAgentHeader[0] : rawAgentHeader;
+        const actingAgent = registry.resolve(requestedAgentId);
+        const result = await executeTool(actingAgent, toolName, req.body ?? {});
         // Log usage to portal
         if (req._portalKey?.apiKey) {
           fetch(`${PORTAL_URL}/portal/log-usage`, {
