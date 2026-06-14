@@ -294,7 +294,7 @@ export function isValidTenantAgentId(id: string): boolean {
   return TENANT_AGENT_ID_RE.test(id) && !id.includes("..");
 }
 
-class AgentRegistry {
+export class AgentRegistry {
   private readonly cache = new Map<string, Agent>();
   /** Cap the number of distinct tenant agents held in-process (DoS guard). */
   static readonly MAX_TENANTS = 10_000;
@@ -333,6 +333,18 @@ class AgentRegistry {
   tenantIds(): string[] {
     return [...this.cache.keys()];
   }
+}
+
+/**
+ * Pull the per-request acting agent id out of MCP tool-call args. On the direct
+ * MCP path the calling tenant supplies an optional `_agentId` arg; on the
+ * REST/HTTP path it arrives as the `X-MnemoPay-Agent` header (resolved before
+ * this is reached). Returns undefined when no id was supplied so the boot agent
+ * is used — keeping single-tenant callers byte-for-byte unchanged.
+ */
+export function agentIdFromArgs(args: Record<string, any> | undefined): string | undefined {
+  const id = args && typeof args._agentId === "string" ? args._agentId.trim() : "";
+  return id || undefined;
 }
 
 // ─── Brain bridge (read-only) ────────────────────────────────────────────────
@@ -2773,6 +2785,10 @@ async function getCommerceEngine(agent: Agent): Promise<any> {
 
 export async function startServer(): Promise<void> {
   const agent = createAgent();
+  // Multi-tenant wallet routing: one boot agent + a lazily-built per-tenant
+  // agent (own wallet/ledger/memory/persistence file). When a request carries
+  // no identity, registry.resolve() returns the boot agent unchanged.
+  const registry = new AgentRegistry(agent);
 
   const allowedTools = resolveToolFilter(getToolFilterSpec(process.argv));
   const filteredTools = TOOLS.filter(t => allowedTools.has(t.name));
@@ -2813,7 +2829,11 @@ export async function startServer(): Promise<void> {
         }
       }
 
-      const result = await executeTool(agent, name, args ?? {});
+      // Multi-tenant routing: per-request acting agent from optional `_agentId`
+      // arg. No id → boot agent (single-tenant behavior unchanged). Invalid /
+      // traversal ids are rejected inside registry.resolve().
+      const actingAgent = registry.resolve(agentIdFromArgs(args ?? {}));
+      const result = await executeTool(actingAgent, name, args ?? {});
       return { content: [{ type: "text", text: result }] };
     } catch (err: any) {
       // Security: sanitize error messages — never leak internal state
@@ -3300,7 +3320,13 @@ export async function startServer(): Promise<void> {
       }
       const start = Date.now();
       try {
-        const result = await executeTool(agent, toolName, req.body ?? {});
+        // Multi-tenant routing: acting agent from the `X-MnemoPay-Agent`
+        // header. Absent → boot agent. Invalid/traversal ids throw (caught
+        // below → 400). Header may arrive as a string or string[].
+        const rawAgentHeader = req.headers["x-mnemopay-agent"];
+        const requestedAgentId = Array.isArray(rawAgentHeader) ? rawAgentHeader[0] : rawAgentHeader;
+        const actingAgent = registry.resolve(requestedAgentId);
+        const result = await executeTool(actingAgent, toolName, req.body ?? {});
         // Log usage to portal
         if (req._portalKey?.apiKey) {
           fetch(`${PORTAL_URL}/portal/log-usage`, {
