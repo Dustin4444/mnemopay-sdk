@@ -335,6 +335,168 @@ export class AgentRegistry {
   }
 }
 
+// ─── Tenant API-key store (self-serve provisioning) ──────────────────────────
+//
+// The multi-tenant AgentRegistry above already scopes wallet/ledger/memory by
+// agent id (the `X-MnemoPay-Agent` header). What it does NOT do is decide WHO is
+// allowed to act as a given tenant — that gate lived entirely in the BizSuite
+// portal (`/portal/verify-key`). For self-serve sign-up that is the broken link:
+// the site emails a customer an `mp_…` key the substrate never minted and cannot
+// validate, so the very first charge 403s.
+//
+// TenantKeyStore closes that loop WITHOUT inventing a parallel tenancy system:
+// it is a thin authn layer that maps an opaque API key → an existing tenant
+// agent id. The wallet itself is still the AgentRegistry's per-agent
+// MnemoPayLite. A key is provisioned by the guarded `/tenant/provision` route
+// and persisted as a salted SHA-256 hash (never the raw key) to
+// `${persistDir}/tenant-keys.json`, alongside the per-tenant `${agentId}.json`
+// wallet files. On every `/api/*` request the key is looked up here; a hit
+// authenticates the caller AND resolves the acting agent id, so the emitted key
+// authenticates subsequent /api/charge calls for exactly that tenant's wallet.
+//
+// Backward-compatible: when no tenant key matches, auth falls through to the
+// existing portal check / Bearer MNEMOPAY_MCP_TOKEN path unchanged.
+
+interface TenantKeyRecord {
+  /** SHA-256(salt + apiKey), hex. The raw key is never stored. */
+  keyHash: string;
+  agentId: string;
+  plan?: string;
+  email?: string;
+  createdAt: string;
+  /** Set when a key is revoked; lookups then miss. */
+  revokedAt?: string;
+}
+
+interface TenantKeyStoreFile {
+  version: 1;
+  /** Per-store random salt so a leaked file can't be rainbow-tabled offline. */
+  salt: string;
+  records: TenantKeyRecord[];
+}
+
+export class TenantKeyStore {
+  private file: TenantKeyStoreFile;
+  private readonly path: string | null;
+
+  /** @param dir directory to persist `tenant-keys.json` into, or null for in-memory only (tests). */
+  constructor(dir: string | null) {
+    this.path = dir ? require("path").join(dir, "tenant-keys.json") : null;
+    this.file = this.load();
+  }
+
+  private load(): TenantKeyStoreFile {
+    if (this.path && fs.existsSync(this.path)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(this.path, "utf8")) as TenantKeyStoreFile;
+        if (parsed && parsed.version === 1 && Array.isArray(parsed.records) && typeof parsed.salt === "string") {
+          return parsed;
+        }
+        console.error("[mnemopay-mcp] tenant-keys.json malformed — starting a fresh store");
+      } catch (err: any) {
+        console.error(`[mnemopay-mcp] failed to read tenant-keys.json (${err?.message || err}); starting fresh`);
+      }
+    }
+    return { version: 1, salt: require("crypto").randomBytes(16).toString("hex"), records: [] };
+  }
+
+  private persist(): void {
+    if (!this.path) return;
+    try {
+      fs.mkdirSync(require("path").dirname(this.path), { recursive: true });
+      // Write-then-rename for crash-safety; keys file is small so this is cheap.
+      const tmp = `${this.path}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(this.file, null, 2), { mode: 0o600 });
+      fs.renameSync(tmp, this.path);
+    } catch (err: any) {
+      console.error(`[mnemopay-mcp] failed to persist tenant-keys.json: ${err?.message || err}`);
+    }
+  }
+
+  private hash(apiKey: string): string {
+    return require("crypto").createHash("sha256").update(this.file.salt + apiKey).digest("hex");
+  }
+
+  /** Number of active (non-revoked) keys — for diagnostics/tests. */
+  size(): number {
+    return this.file.records.filter(r => !r.revokedAt).length;
+  }
+
+  /**
+   * Look up the tenant a key authenticates as. Constant-time over all stored
+   * hashes so a present/absent key can't be timed apart. Returns null on miss
+   * or if the matched key is revoked.
+   */
+  lookup(apiKey: string): TenantKeyRecord | null {
+    if (!apiKey) return null;
+    const h = this.hash(apiKey);
+    let match: TenantKeyRecord | null = null;
+    for (const rec of this.file.records) {
+      // constantTimeEqual short-circuits on length mismatch but both are 64-hex.
+      if (constantTimeEqual(rec.keyHash, h) && !rec.revokedAt) match = rec;
+    }
+    return match;
+  }
+
+  /** First active record for an agent id, or null. */
+  private activeForAgent(agentId: string): TenantKeyRecord | null {
+    return this.file.records.find(r => r.agentId === agentId && !r.revokedAt) || null;
+  }
+
+  /**
+   * Mint (or idempotently return) a working API key for a tenant.
+   *
+   * Idempotency: provisioning is driven by a Stripe webhook that can fire more
+   * than once for the same checkout. The caller derives a STABLE agentId from
+   * (email, plan); if that agent already has an active key we return the SAME
+   * key rather than minting a second one — so webhook retries never email a
+   * second, divergent key or orphan a wallet. The raw key is only knowable at
+   * first mint, so on the idempotent path `apiKey` is returned as null and the
+   * caller relies on its own persisted copy (e.g. Stripe session metadata).
+   *
+   * @param mode "test" | "live" — chooses the key prefix (mp_test_ / mp_live_).
+   */
+  mint(opts: { agentId: string; plan?: string; email?: string; mode: "test" | "live" }): {
+    agentId: string;
+    apiKey: string | null;
+    created: boolean;
+  } {
+    const { agentId, plan, email, mode } = opts;
+    if (!isValidTenantAgentId(agentId)) {
+      throw new Error("Invalid tenant agentId");
+    }
+    const existing = this.activeForAgent(agentId);
+    if (existing) {
+      return { agentId, apiKey: null, created: false };
+    }
+    const prefix = mode === "live" ? "mp_live_" : "mp_test_";
+    const apiKey = prefix + require("crypto").randomBytes(32).toString("hex");
+    this.file.records.push({
+      keyHash: this.hash(apiKey),
+      agentId,
+      plan,
+      email,
+      createdAt: new Date().toISOString(),
+    });
+    this.persist();
+    return { agentId, apiKey, created: true };
+  }
+
+  /** Revoke every active key for an agent id. Returns count revoked. */
+  revokeAgent(agentId: string): number {
+    let n = 0;
+    const now = new Date().toISOString();
+    for (const rec of this.file.records) {
+      if (rec.agentId === agentId && !rec.revokedAt) {
+        rec.revokedAt = now;
+        n++;
+      }
+    }
+    if (n) this.persist();
+    return n;
+  }
+}
+
 /**
  * Pull the per-request acting agent id out of MCP tool-call args. On the direct
  * MCP path the calling tenant supplies an optional `_agentId` arg; on the
@@ -2790,6 +2952,15 @@ export async function startServer(): Promise<void> {
   // no identity, registry.resolve() returns the boot agent unchanged.
   const registry = new AgentRegistry(agent);
 
+  // Self-serve API-key store: maps a minted `mp_…` key → its tenant agent id.
+  // Persisted alongside the per-tenant wallet files so a restart keeps keys
+  // valid. Lives only on the HTTP path (the `/tenant/provision` route +
+  // `/api/*` auth). In production mode there is no local persist dir, so the
+  // store is in-memory and provisioning is unavailable (production routes
+  // tenancy through the upstream services).
+  const cfg = resolveAgentConfig();
+  const tenantKeys = new TenantKeyStore(cfg.persistDir ?? null);
+
   const allowedTools = resolveToolFilter(getToolFilterSpec(process.argv));
   const filteredTools = TOOLS.filter(t => allowedTools.has(t.name));
   console.error(`[mnemopay-mcp] Tool filter: ${filteredTools.length}/${TOOLS.length} tools exposed`);
@@ -3146,6 +3317,17 @@ export async function startServer(): Promise<void> {
       const apiKey = req.headers["x-api-key"] || req.query.key;
       if (!apiKey) return next(); // Fall through to existing mcpAuth if no portal key
 
+      // Self-serve keys minted by this substrate's /tenant/provision route are
+      // validated LOCALLY (no round-trip to the BizSuite portal). A hit both
+      // authenticates the caller and pins the acting tenant agent id, so the
+      // emitted key alone is enough to make a scoped, authenticated charge.
+      const tenantRec = tenantKeys.lookup(String(apiKey));
+      if (tenantRec) {
+        req._tenantAgentId = tenantRec.agentId;
+        req._localTenantKey = true;
+        return next();
+      }
+
       try {
         const resp = await fetch(`${PORTAL_URL}/portal/verify-key`, {
           headers: { "x-api-key": apiKey }
@@ -3217,6 +3399,84 @@ export async function startServer(): Promise<void> {
       }
       next();
     }
+
+    // ── Tenant provisioning (self-serve buy-path) ───────────────────────
+    // Guarded by a dedicated provisioner secret — NOT the per-tenant keys and
+    // NOT the MCP bearer. Only the site's Stripe webhook (holding
+    // MNEMOPAY_PROVISIONER_TOKEN) may mint tenants. Mints (or idempotently
+    // returns) a working `mp_…` key bound to a stable tenant agent id; that key
+    // then authenticates /api/charge for the tenant's own wallet.
+    const PROVISIONER_TOKEN = process.env.MNEMOPAY_PROVISIONER_TOKEN;
+    if (!PROVISIONER_TOKEN) {
+      console.error(
+        "[mnemopay-mcp] MNEMOPAY_PROVISIONER_TOKEN not set — /tenant/provision is DISABLED (returns 503)",
+      );
+    }
+
+    function provisionerAuth(req: any, res: any, next: any): void {
+      if (!PROVISIONER_TOKEN) {
+        res.status(503).json({ error: "Provisioning disabled — MNEMOPAY_PROVISIONER_TOKEN not configured" });
+        return;
+      }
+      const auth = req.headers.authorization || "";
+      if (!constantTimeEqual(auth, `Bearer ${PROVISIONER_TOKEN}`)) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      next();
+    }
+
+    const substratePublicUrl =
+      process.env.MNEMOPAY_URL ||
+      (process.env.FLY_APP_NAME ? `https://${process.env.FLY_APP_NAME}.fly.dev` : `http://localhost:${process.env.PORT || 3200}`);
+
+    app.post("/tenant/provision", provisionerAuth, (req: any, res: any) => {
+      try {
+        const body = req.body || {};
+        const agentId = typeof body.agentId === "string" ? body.agentId.trim() : "";
+        if (!agentId) {
+          res.status(400).json({ error: "agentId is required" });
+          return;
+        }
+        if (!isValidTenantAgentId(agentId)) {
+          res.status(400).json({ error: "Invalid agentId (must match ^[A-Za-z0-9._:-]{1,128}$, no '..')" });
+          return;
+        }
+        // Key mode follows the rail/Stripe posture: a live Stripe rail mints
+        // mp_live_ keys, anything else mints mp_test_. Callers may force it with
+        // body.mode for an explicit test/live split independent of the rail.
+        const railIsLive =
+          (process.env.MNEMOPAY_PAYMENT_RAIL || "").toLowerCase() === "stripe" &&
+          (process.env.STRIPE_SECRET_KEY || "").startsWith("sk_live_");
+        const mode: "test" | "live" = body.mode === "live" || body.mode === "test"
+          ? body.mode
+          : railIsLive ? "live" : "test";
+
+        const minted = tenantKeys.mint({
+          agentId,
+          plan: typeof body.plan === "string" ? body.plan : undefined,
+          email: typeof body.email === "string" ? body.email : undefined,
+          mode,
+        });
+
+        // Warm the wallet so the tenant exists in the registry immediately
+        // (the first charge would lazily build it anyway; doing it here surfaces
+        // any tenant-cap error at provision time instead of first-call time).
+        try { registry.resolve(agentId); } catch { /* cap guard — non-fatal */ }
+
+        res.json({
+          ok: true,
+          agentId: minted.agentId,
+          apiKey: minted.apiKey, // null on idempotent re-provision (already minted)
+          created: minted.created,
+          substrateUrl: substratePublicUrl,
+          agentHeader: "X-MnemoPay-Agent",
+          mode,
+        });
+      } catch (err: any) {
+        res.status(400).json({ ok: false, error: err?.message || "provision failed" });
+      }
+    });
 
     // ── Streamable HTTP transport (modern MCP, used by Smithery) ────────
     const { StreamableHTTPServerTransport } = await import(
@@ -3320,11 +3580,23 @@ export async function startServer(): Promise<void> {
       }
       const start = Date.now();
       try {
-        // Multi-tenant routing: acting agent from the `X-MnemoPay-Agent`
-        // header. Absent → boot agent. Invalid/traversal ids throw (caught
-        // below → 400). Header may arrive as a string or string[].
-        const rawAgentHeader = req.headers["x-mnemopay-agent"];
-        const requestedAgentId = Array.isArray(rawAgentHeader) ? rawAgentHeader[0] : rawAgentHeader;
+        // Multi-tenant routing. Precedence:
+        //   1. A locally-minted tenant key PINS its own agent id (set by
+        //      portalKeyAuth). The key alone determines the wallet — a caller
+        //      cannot point someone else's key at a different tenant via the
+        //      header.
+        //   2. Otherwise the `X-MnemoPay-Agent` header selects the tenant
+        //      (portal-key / Bearer path — unchanged).
+        //   3. Absent → boot agent.
+        // Invalid/traversal ids throw (caught below → 400). Header may arrive as
+        // a string or string[].
+        let requestedAgentId: string | undefined;
+        if (req._tenantAgentId) {
+          requestedAgentId = req._tenantAgentId;
+        } else {
+          const rawAgentHeader = req.headers["x-mnemopay-agent"];
+          requestedAgentId = Array.isArray(rawAgentHeader) ? rawAgentHeader[0] : rawAgentHeader;
+        }
         const actingAgent = registry.resolve(requestedAgentId);
         const result = await executeTool(actingAgent, toolName, req.body ?? {});
         // Log usage to portal
