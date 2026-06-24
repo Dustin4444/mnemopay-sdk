@@ -4,6 +4,25 @@ All notable changes to `@mnemopay/sdk` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [1.14.1] - 2026-06-24
+
+Docs + examples for the Swarm product loop. No runtime API changes — fully backward compatible with 1.14.0.
+
+### Added
+
+- **Example 12 (`examples/12-swarm-catalog-demo.ts`)** — catalog → `Swarm` → audit JSONL → ledger receipt end-to-end demo.
+- **`docs/jkai-swarm-demo-short.md`** — JKAI short script for the `@mnemopay/swarm` launch.
+
+### Changed
+
+- **Swarm stability** — README and `src/swarm/index.ts` now document Swarm as **stable since 1.11.0** (was alpha-framed).
+- **Examples index** — lists example 12.
+
+### Ecosystem
+
+- **`@mnemopay/swarm@0.1.0`** — new CLI on npm (`list`, `install`, `demo`, `run`).
+- **Skill catalog** — three verified partner skills (`mnemopay/sdk`, `mnemopay/browser`, `mnemopay/swarm`) on `mcp.mnemopay.com`.
+
 ## [1.13.1] - 2026-06-13
 
 Ships the `./recall/postgres` subpath export that landed on master

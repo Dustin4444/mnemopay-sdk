@@ -49,7 +49,7 @@
  *     the provider exposes it, then waits up to 5s (configurable), then
  *     calls `provider.close()` as the hard force.
  *
- * v1.10.0-alpha.0 — public API may shift before 1.10.0 final.
+ * Stable since SDK v1.11.0 — API frozen for the 1.x line.
  */
 
 /**

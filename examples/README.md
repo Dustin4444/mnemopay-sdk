@@ -12,6 +12,9 @@ Runnable snippets for `@mnemopay/sdk`. All examples use `npx tsx` from the repo 
 | 06 | [06-production.ts](./06-production.ts) | Production-shaped setup |
 | 07 | [07-recall-anchor.ts](./07-recall-anchor.ts) | Ed25519 memory anchoring |
 | **08** | **[08-invoice-collector.ts](./08-invoice-collector.ts)** | **Governed skill + approvals + action ledger** |
+| 10 | [10-usage-loop.ts](./10-usage-loop.ts) | Repeated real work loop to build reputation/credit history |
+| 11 | [11-claude-cache-benchmark.ts](./11-claude-cache-benchmark.ts) | Claude prompt cache savings benchmark (40-60%+ bill reduction on recall-heavy sessions) |
+| **12** | **[12-swarm-catalog-demo.ts](./12-swarm-catalog-demo.ts)** | **Catalog → Swarm → audit JSONL → ledger receipt** |
 
 ## Invoice Collector (recommended for trust stack demo)
 

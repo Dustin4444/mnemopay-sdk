@@ -89,9 +89,11 @@ Use the root import when you want the full SDK surface. Use `@mnemopay/sdk/mcp` 
 
 ---
 
-## Swarm (alpha — build with us)
+## Swarm (stable — v1.11+)
 
 `@mnemopay/sdk/swarm` is the missing piece that browse.sh shipped as a public skill catalog. Ours adds the bit they don't: every agent in the swarm carries a DID, every action is FiscalGate-prechecked against per-agent + total caps, every TaskResult is appended to a shared Article-12 audit chain, and every skill invocation is billable through the same hash-chained ledger the rest of the SDK already uses.
+
+**CLI:** `npx @mnemopay/swarm list` · `npx @mnemopay/swarm demo` — see [mnemopay-swarm](https://github.com/mnemopay/mnemopay-swarm).
 
 ```ts
 import { Swarm } from "@mnemopay/sdk/swarm";
@@ -128,9 +130,9 @@ const final   = await swarm.recombine(results, "merge-json");
 
 **Skill catalog.** Public listings live at [mcp.mnemopay.com/skills](https://mcp.mnemopay.com/skills). The catalog is intentionally small and honestly marked — verified-partner badges only show after a real partnership is signed. Everything else carries `verified: false, status: 'pending-partner'` so you know exactly what trust tier you're getting.
 
-### BrowserSwarm — native browser-session fan-out (1.11.0-alpha.0)
+### BrowserSwarm — native browser-session fan-out (stable since 1.11.0)
 
-`@mnemopay/sdk/swarm/browser` extends `Swarm` with a typed step sequence (`goto` / `act` / `extract` / `screenshot` / `wait`) per task and a lazy wire to `@mnemopay/browser` (optional peer dep — installing the SDK does NOT pull Playwright). Each task gets its own browser session, every step appends a `browser.step` event to the shared audit chain, and a thrown step kills only that one task — sibling sessions keep running. Alpha; build with us.
+`@mnemopay/sdk/swarm/browser` extends `Swarm` with a typed step sequence (`goto` / `act` / `extract` / `screenshot` / `wait`) per task and a lazy wire to `@mnemopay/browser` (optional peer dep — installing the SDK does NOT pull Playwright). Each task gets its own browser session, every step appends a `browser.step` event to the shared audit chain, and a thrown step kills only that one task — sibling sessions keep running.
 
 ```ts
 import { BrowserSwarm } from "@mnemopay/sdk/swarm/browser";
@@ -147,7 +149,7 @@ const run = await swarm.spawn([
 const results = await swarm.gather(run);   // BrowserTaskResult[] with .screenshots + .extractedData
 ```
 
-Alpha — public API may shift before 1.11.0 final. File issues at [github.com/mnemopay/mnemopay-sdk](https://github.com/mnemopay/mnemopay-sdk).
+File issues at [github.com/mnemopay/mnemopay-sdk](https://github.com/mnemopay/mnemopay-sdk).
 
 ### Audit-only middleware — `.audit(client)` with streaming + on-disk chain (1.11.0-alpha.0)
 
@@ -746,7 +748,9 @@ MnemoPay follows semver. Stability tiers tell you how much a module's public API
 | MnemoSkills (governed skills) | `@mnemopay/sdk/skills` | **Beta** | versioned, permissioned, billable capabilities — see [examples/08-invoice-collector.ts](./examples/08-invoice-collector.ts) |
 | Spatial / GridStamp | `@mnemopay/sdk/governance` | **Beta** | proof-of-presence, loose-coupled, fail-closed |
 | Rails — x402 / AP2 / StripeMPP | `@mnemopay/sdk/rails` | **Alpha** | emerging agent-payment standards |
-| Swarm (voice / browser) | `@mnemopay/sdk/swarm` | **Alpha** | public API may shift; build with us |
+| Swarm | `@mnemopay/sdk/swarm` | **Stable** | `spawn` / `gather` / `recombine` / `stop`; 27 unit tests |
+| Swarm CLI | `@mnemopay/swarm` | **Stable** | catalog list/install/demo |
+| BrowserSwarm / voice | `@mnemopay/sdk/swarm/browser` | **Stable** | optional `@mnemopay/browser` peer |
 
 ---
 
