@@ -1,0 +1,28 @@
+# MnemoPay hosted dashboard (dashboard.mnemopay.com)
+# Deploy from repo root: railway up -s mnemopay-landing
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "dashboard/Dockerfile"
+
+[deploy]
+startCommand = "node server.js"
+healthcheckPath = "/readyz"
+healthcheckTimeout = 120
+numReplicas = 1
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+[env]
+PORT = "8080"
+NODE_ENV = "production"
+MNEMOPAY_CONSOLE_STORE_DRIVER = "sqlite"
+MNEMOPAY_CONSOLE_SQLITE = "/data/console-store.sqlite"
+MNEMOPAY_LOG_LEVEL = "info"
+MNEMOPAY_PUBLIC_URL = "https://dashboard.mnemopay.com"
+MNEMOPAY_GATEWAY_URL = "https://mcp-gateway-api-production.up.railway.app"
+MNEMOPAY_CORS_ALLOWLIST = "https://dashboard.mnemopay.com,https://mnemopay.com,https://www.mnemopay.com,https://mnemopay-landing-production.up.railway.app"
+STRIPE_CHECKOUT_PAYMENT_METHOD_TYPES = "card,us_bank_account"
+MNEMOPAY_AUTH_EMAIL_FROM = "MnemoPay <login@mnemopay.com>"
+MAILEROO_FROM = "info@getbizsuite.com"
+MAILEROO_API_URL = "https://smtp.maileroo.com/api/v2/emails"
