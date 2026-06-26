@@ -5,6 +5,7 @@
 FROM node:20-slim AS sdk-build
 WORKDIR /sdk
 COPY package.json package-lock.json* tsconfig.json ./
+COPY scripts ./scripts
 COPY src ./src
 RUN npm ci --ignore-scripts || npm install --ignore-scripts
 RUN npm run build
@@ -18,7 +19,10 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 COPY dashboard/package.json dashboard/package-lock.json* ./
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev || npm install --omit=dev; else npm install --omit=dev; fi
+RUN npm config set fetch-retries 5 \
+  && npm config set fetch-retry-mintimeout 20000 \
+  && npm config set fetch-retry-maxtimeout 120000 \
+  && npm install --omit=dev --no-audit --no-fund
 
 # Replace the registry-fetched @mnemopay/sdk with our freshly-built local one.
 # The published 1.5.0 has ESM-only `exports` and breaks under CJS require();
