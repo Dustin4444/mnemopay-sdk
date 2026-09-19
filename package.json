@@ -262,7 +262,7 @@
     "zod": "^3.23.0"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0",
+    "@huggingface/transformers": "^4.3.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/express": "^4.17.21",
     "better-sqlite3": "^12.9.0",
